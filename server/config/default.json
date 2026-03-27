@@ -1,0 +1,29 @@
+{
+  "editor": {
+    "inputDir": "./input",
+    "outputDir": "./output",
+    "tempDir": "./output/temp",
+    "logsDir": "./logs",
+    "cleanTempAfter": true,
+    "logLevel": "info"
+  },
+  "server": {
+    "port": 3001
+  },
+  "pipeline": {
+    "steps": [
+      {
+        "name": "passthrough",
+        "enabled": true,
+        "description": "מעביר את הקובץ בלי שינוי (לבדיקת pipeline)"
+      }
+    ]
+  },
+  "ffmpeg": {
+    "path": "ffmpeg",
+    "ffprobePath": "ffprobe",
+    "defaultVideoCodec": "libx264",
+    "defaultAudioCodec": "aac",
+    "defaultPreset": "medium"
+  }
+}
