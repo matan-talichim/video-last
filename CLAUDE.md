@@ -77,8 +77,8 @@
 
 | רכיב | טכנולוגיה |
 |-------|-----------|
-| Backend | Node.js 20+, TypeScript, Express, ESM |
-| Frontend | React 18+, TypeScript, Vite, Tailwind CSS |
+| Backend (`server/`) | Node.js 20+, TypeScript, Express, ESM |
+| Frontend (`client/`) | React 18, TypeScript, Vite, Tailwind CSS 3 |
 | i18n | react-i18next (עברית + אנגלית) |
 | וידאו | FFmpeg 6+ |
 | רנדר | Remotion (גל 3+) |
