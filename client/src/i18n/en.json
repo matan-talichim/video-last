@@ -1,0 +1,20 @@
+{
+  "app": {
+    "title": "AI Editor",
+    "subtitle": "AI-Powered Automatic Video Editor"
+  },
+  "home": {
+    "welcome": "Welcome",
+    "description": "Upload a video file and the system will edit it automatically",
+    "uploadButton": "Upload Video",
+    "createButton": "Create Video from Prompt",
+    "or": "or",
+    "status": "System Status",
+    "statusOk": "Active",
+    "statusError": "Unavailable"
+  },
+  "language": {
+    "he": "עברית",
+    "en": "English"
+  }
+}
