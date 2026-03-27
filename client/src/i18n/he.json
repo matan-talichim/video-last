@@ -13,6 +13,78 @@
     "statusOk": "פעיל",
     "statusError": "לא זמין"
   },
+  "upload": {
+    "dropzone": "גררו קובץ לכאן או לחצו לבחירה",
+    "dropzoneActive": "שחררו את הקובץ כאן",
+    "selectedFile": "קובץ נבחר",
+    "fileSize": "גודל",
+    "uploading": "מעלה...",
+    "uploadProgress": "{{percent}}% הועלה",
+    "uploadSuccess": "הועלה בהצלחה!",
+    "uploadError": "שגיאה בהעלאה",
+    "invalidFormat": "פורמט לא נתמך. פורמטים נתמכים: MP4, MOV, AVI, MKV, WebM",
+    "cancel": "ביטול",
+    "retry": "נסה שוב"
+  },
+  "settings": {
+    "title": "הגדרות סרטון",
+    "videoInfo": "פרטי הסרטון",
+    "fileName": "שם קובץ",
+    "fileSize": "גודל",
+    "duration": "משך",
+    "resolution": "רזולוציה",
+    "seconds": "שניות",
+    "videoType": "סוג סרטון",
+    "videoTypes": {
+      "sponsored_ad": "פרסומת ממומנת",
+      "brand_video": "סרטון תדמית",
+      "product_marketing": "שיווק מוצר",
+      "tiktok_reel": "טיקטוק / ריל",
+      "story": "סטורי",
+      "general": "סרטון כללי"
+    },
+    "targetDuration": "משך סרטון רצוי",
+    "durations": {
+      "15": "15 שניות",
+      "30": "30 שניות",
+      "45": "45 שניות",
+      "60": "60 שניות",
+      "90": "90 שניות",
+      "auto": "AI יחליט"
+    },
+    "brollModel": "מודל B-Roll",
+    "brollModels": {
+      "kling_2_5": "Kling 2.5",
+      "veo_3_1_fast": "Veo 3.1 Fast",
+      "veo_3_1_quality": "Veo 3.1 Quality",
+      "sora_2": "Sora 2",
+      "wan_2_5": "WAN 2.5",
+      "seedance": "Seedance",
+      "auto": "AI יבחר"
+    },
+    "aiBrain": "מוח AI",
+    "aiBrains": {
+      "claude_sonnet_4_6": "Claude Sonnet 4.6",
+      "gpt_5_4": "GPT-5.4"
+    },
+    "template": "תבנית מותאמת",
+    "templatePlaceholder": "ערכו את התבנית לפי הצורך...",
+    "templates": {
+      "sponsored_ad": "hook חזק ב-2 שניות ראשונות, קצב מהיר, CTA בסוף, טקסטים בולטים על המסך",
+      "brand_video": "פתיחה סינמטית, קצב איטי ומכובד, מוזיקה רגשית, לוגו בסיום",
+      "product_marketing": "הצגת בעיה → פתרון, קלוזאפים על המוצר, המלצות לקוחות, CTA",
+      "tiktok_reel": "קצב מהיר מאוד, חיתוכים כל 1-2 שניות, טקסט על המסך, מוזיקה טרנדית",
+      "story": "פורמט אנכי 9:16, טקסטים גדולים, 15 שניות מקסימום, CTA בסוף",
+      "general": "חיתוכים חכמים, הסרת שתיקות, כתוביות אוטומטיות, מוזיקת רקע"
+    },
+    "startAnalysis": "התחל ניתוח",
+    "saving": "שומר הגדרות..."
+  },
+  "analysis": {
+    "title": "ניתוח סרטון",
+    "placeholder": "הניתוח יתחיל בקרוב...",
+    "backToSettings": "חזרה להגדרות"
+  },
   "language": {
     "he": "עברית",
     "en": "English"

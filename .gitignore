@@ -2,10 +2,12 @@ node_modules/
 dist/
 output/
 logs/
+server/input/
 input/*.mp4
 input/*.mov
 input/*.avi
 input/*.mkv
 *.temp
+*.tsbuildinfo
 .DS_Store
 .env

@@ -25,11 +25,17 @@ export interface StepConfigEntry {
   options?: Record<string, unknown>;
 }
 
+export interface UploadConfig {
+  allowedFormats: string[];
+  maxFileSize: number;
+}
+
 export interface AppConfig {
   editor: EditorConfig;
   server: { port: number };
   pipeline: { steps: StepConfigEntry[] };
   ffmpeg: FFmpegConfig;
+  upload: UploadConfig;
 }
 
 export function loadConfig(configPath?: string): AppConfig {

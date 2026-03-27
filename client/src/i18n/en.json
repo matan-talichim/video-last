@@ -13,6 +13,78 @@
     "statusOk": "Active",
     "statusError": "Unavailable"
   },
+  "upload": {
+    "dropzone": "Drag a file here or click to browse",
+    "dropzoneActive": "Drop the file here",
+    "selectedFile": "Selected file",
+    "fileSize": "Size",
+    "uploading": "Uploading...",
+    "uploadProgress": "{{percent}}% uploaded",
+    "uploadSuccess": "Uploaded successfully!",
+    "uploadError": "Upload failed",
+    "invalidFormat": "Unsupported format. Supported: MP4, MOV, AVI, MKV, WebM",
+    "cancel": "Cancel",
+    "retry": "Retry"
+  },
+  "settings": {
+    "title": "Video Settings",
+    "videoInfo": "Video Details",
+    "fileName": "File name",
+    "fileSize": "Size",
+    "duration": "Duration",
+    "resolution": "Resolution",
+    "seconds": "seconds",
+    "videoType": "Video Type",
+    "videoTypes": {
+      "sponsored_ad": "Sponsored Ad",
+      "brand_video": "Brand Video",
+      "product_marketing": "Product Marketing",
+      "tiktok_reel": "TikTok / Reel",
+      "story": "Story",
+      "general": "General Video"
+    },
+    "targetDuration": "Target Duration",
+    "durations": {
+      "15": "15 seconds",
+      "30": "30 seconds",
+      "45": "45 seconds",
+      "60": "60 seconds",
+      "90": "90 seconds",
+      "auto": "AI decides"
+    },
+    "brollModel": "B-Roll Model",
+    "brollModels": {
+      "kling_2_5": "Kling 2.5",
+      "veo_3_1_fast": "Veo 3.1 Fast",
+      "veo_3_1_quality": "Veo 3.1 Quality",
+      "sora_2": "Sora 2",
+      "wan_2_5": "WAN 2.5",
+      "seedance": "Seedance",
+      "auto": "AI chooses"
+    },
+    "aiBrain": "AI Brain",
+    "aiBrains": {
+      "claude_sonnet_4_6": "Claude Sonnet 4.6",
+      "gpt_5_4": "GPT-5.4"
+    },
+    "template": "Custom Template",
+    "templatePlaceholder": "Edit the template as needed...",
+    "templates": {
+      "sponsored_ad": "Strong hook in first 2 seconds, fast pace, CTA at the end, bold on-screen text",
+      "brand_video": "Cinematic opening, slow dignified pace, emotional music, logo at the end",
+      "product_marketing": "Problem → Solution, product close-ups, customer testimonials, CTA",
+      "tiktok_reel": "Very fast pace, cuts every 1-2 seconds, on-screen text, trending music",
+      "story": "Vertical 9:16 format, large text, 15 seconds max, CTA at the end",
+      "general": "Smart cuts, silence removal, automatic subtitles, background music"
+    },
+    "startAnalysis": "Start Analysis",
+    "saving": "Saving settings..."
+  },
+  "analysis": {
+    "title": "Video Analysis",
+    "placeholder": "Analysis will begin shortly...",
+    "backToSettings": "Back to Settings"
+  },
   "language": {
     "he": "עברית",
     "en": "English"
