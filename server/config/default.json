@@ -17,6 +17,17 @@
   "pipeline": {
     "steps": [
       {
+        "name": "preprocess",
+        "enabled": true,
+        "description": "חילוץ אודיו, וידאו פרוקסי ופריימים מהסרטון",
+        "options": {
+          "audioSampleRate": 16000,
+          "proxyHeight": 480,
+          "proxyFps": 10,
+          "frameInterval": 5
+        }
+      },
+      {
         "name": "passthrough",
         "enabled": true,
         "description": "מעביר את הקובץ בלי שינוי (לבדיקת pipeline)"

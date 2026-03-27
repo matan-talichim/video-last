@@ -2,12 +2,13 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { rename } from 'node:fs/promises';
 import type { AppConfig } from '../utils/config.js';
 import { getMediaInfo } from '../utils/ffmpeg.js';
 import { createLogger } from '../utils/logger.js';
+import { runPreprocess } from '../pipeline/steps/preprocess.js';
 
 export function createApiRouter(config: AppConfig): Router {
   const router = Router();
@@ -183,6 +184,109 @@ export function createApiRouter(config: AppConfig): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('Job fetch failed', { error: message });
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // ──────────────────────────────────────────
+  // POST /api/jobs/:jobId/process
+  // ──────────────────────────────────────────
+  router.post('/jobs/:jobId/process', (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const jobDir = resolve(config.editor.inputDir, jobId!);
+
+      if (!existsSync(jobDir)) {
+        logger.warn('Process — job not found', { jobId });
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const settingsPath = resolve(jobDir, 'settings.json');
+      if (!existsSync(settingsPath)) {
+        logger.warn('Process — settings not found', { jobId });
+        res.status(400).json({ error: 'Settings not configured' });
+        return;
+      }
+
+      // Find the original video file
+      const files = readdirSync(jobDir).filter((f) => f.startsWith('original.'));
+      if (files.length === 0) {
+        logger.warn('Process — original file not found', { jobId });
+        res.status(400).json({ error: 'Original video file not found' });
+        return;
+      }
+
+      const inputFile = resolve(jobDir, files[0]!);
+
+      // Update status to processing
+      const statusPath = resolve(jobDir, 'status.json');
+      writeFileSync(statusPath, JSON.stringify({ status: 'processing' }, null, 2), 'utf-8');
+
+      logger.info('Process started', { jobId, inputFile });
+
+      // Get preprocess options from config
+      const preprocessStep = config.pipeline.steps.find((s) => s.name === 'preprocess');
+      const stepOptions = preprocessStep?.options ?? {};
+      const options = {
+        audioSampleRate: (stepOptions.audioSampleRate as number) ?? 16000,
+        proxyHeight: (stepOptions.proxyHeight as number) ?? 480,
+        proxyFps: (stepOptions.proxyFps as number) ?? 10,
+        frameInterval: (stepOptions.frameInterval as number) ?? 5,
+      };
+
+      // Run preprocess in the background (do not await)
+      runPreprocess(jobDir, inputFile, config.ffmpeg, logger, options).catch((err) => {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error('Process failed', { jobId, error: errorMsg });
+        writeFileSync(
+          statusPath,
+          JSON.stringify({ status: 'error', error: errorMsg }, null, 2),
+          'utf-8',
+        );
+      });
+
+      res.json({ jobId, status: 'processing' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Process endpoint failed', { error: message });
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // ──────────────────────────────────────────
+  // GET /api/jobs/:jobId/status
+  // ──────────────────────────────────────────
+  router.get('/jobs/:jobId/status', (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const jobDir = resolve(config.editor.inputDir, jobId!);
+
+      if (!existsSync(jobDir)) {
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const statusPath = resolve(jobDir, 'status.json');
+      if (!existsSync(statusPath)) {
+        res.json({
+          jobId,
+          status: 'idle',
+          currentStep: 'none',
+          progress: {
+            audio: { status: 'pending' },
+            proxy: { status: 'pending' },
+            frames: { status: 'pending' },
+          },
+        });
+        return;
+      }
+
+      const statusData = JSON.parse(readFileSync(statusPath, 'utf-8'));
+      res.json({ jobId, ...statusData });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Status fetch failed', { error: message });
       res.status(500).json({ error: message });
     }
   });

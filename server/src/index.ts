@@ -9,6 +9,7 @@ import { createApiRouter } from './routes/api.js';
 
 // Register pipeline steps
 import './pipeline/steps/passthrough.js';
+import './pipeline/steps/preprocess.js';
 
 const config = loadConfig();
 const logger = createLogger({

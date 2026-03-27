@@ -83,7 +83,18 @@
   "analysis": {
     "title": "Video Analysis",
     "placeholder": "Analysis will begin shortly...",
-    "backToSettings": "Back to Settings"
+    "backToSettings": "Back to Settings",
+    "processing": "Processing video...",
+    "extractAudio": "Audio extraction",
+    "createProxy": "Creating analysis video",
+    "extractFrames": "Frame extraction",
+    "pending": "Pending",
+    "inProgress": "Processing...",
+    "completed": "Completed",
+    "completedTime": "Completed ({{seconds}}s)",
+    "allDone": "Processing complete! Moving to next step...",
+    "error": "Error",
+    "startError": "Failed to start processing"
   },
   "language": {
     "he": "עברית",
