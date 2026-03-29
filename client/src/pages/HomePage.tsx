@@ -35,14 +35,23 @@ function HomePage() {
   const xhrRef = useRef<XMLHttpRequest | null>(null);
 
   useEffect(() => {
-    fetch('/api/health')
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    fetch('/api/health', { signal: controller.signal })
       .then((res) => res.json())
       .then((data: { status?: string }) => {
         setServerStatus(data.status === 'ok' ? 'ok' : 'error');
       })
       .catch(() => {
         setServerStatus('error');
-      });
+      })
+      .finally(() => clearTimeout(timeout));
+
+    return () => {
+      controller.abort();
+      clearTimeout(timeout);
+    };
   }, []);
 
   const validateFile = useCallback((file: File): boolean => {

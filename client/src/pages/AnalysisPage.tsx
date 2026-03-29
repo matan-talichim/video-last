@@ -29,8 +29,8 @@ function AnalysisPage() {
   const navigate = useNavigate();
 
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
-  const [started, setStarted] = useState(false);
   const [startError, setStartError] = useState(false);
+  const startedRef = useRef(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const pollStatus = useCallback(async () => {
@@ -53,7 +53,8 @@ function AnalysisPage() {
   }, [jobId]);
 
   useEffect(() => {
-    if (!jobId || started) return;
+    if (!jobId || startedRef.current) return;
+    startedRef.current = true;
 
     const startProcessing = async () => {
       try {
@@ -62,7 +63,6 @@ function AnalysisPage() {
           setStartError(true);
           return;
         }
-        setStarted(true);
 
         // Start polling
         pollRef.current = setInterval(pollStatus, POLL_INTERVAL);
@@ -81,7 +81,7 @@ function AnalysisPage() {
         pollRef.current = null;
       }
     };
-  }, [jobId, started, pollStatus]);
+  }, [jobId, pollStatus]);
 
   const progress = jobStatus?.progress ?? {
     audio: { status: 'pending' as SubStepStatus },
