@@ -12,7 +12,7 @@ interface SubStepProgress {
 
 interface JobStatus {
   jobId: string;
-  status: 'idle' | 'processing' | 'preprocessed' | 'presenter_detected' | 'transcribed' | 'error';
+  status: 'idle' | 'processing' | 'preprocessed' | 'presenter_detected' | 'transcribed' | 'cleaned' | 'error';
   currentStep?: string;
   progress?: {
     audio: SubStepProgress;
@@ -20,6 +20,7 @@ interface JobStatus {
     frames: SubStepProgress;
     presenterDetection: SubStepProgress;
     transcription: SubStepProgress;
+    mergeAndClean: SubStepProgress;
   };
 }
 
@@ -42,7 +43,7 @@ function AnalysisPage() {
         const data = (await res.json()) as JobStatus;
         setJobStatus(data);
 
-        if (data.status === 'transcribed' || data.status === 'error') {
+        if (data.status === 'cleaned' || data.status === 'error') {
           if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
@@ -91,9 +92,10 @@ function AnalysisPage() {
     frames: { status: 'pending' as SubStepStatus },
     presenterDetection: { status: 'pending' as SubStepStatus },
     transcription: { status: 'pending' as SubStepStatus },
+    mergeAndClean: { status: 'pending' as SubStepStatus },
   };
 
-  const isDone = jobStatus?.status === 'transcribed';
+  const isDone = jobStatus?.status === 'cleaned';
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -128,6 +130,10 @@ function AnalysisPage() {
               <StepRow
                 label={t('analysis.transcription')}
                 step={progress.transcription}
+              />
+              <StepRow
+                label={t('analysis.mergeAndClean')}
+                step={progress.mergeAndClean}
               />
             </div>
 

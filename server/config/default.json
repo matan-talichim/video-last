@@ -34,6 +34,11 @@
       }
     ]
   },
+  "ai": {
+    "defaultBrain": "claude_sonnet_4_6",
+    "timeout": 60000,
+    "maxTokens": 4096
+  },
   "transcription": {
     "model": "nova-3",
     "language": "he",
