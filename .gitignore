@@ -11,5 +11,6 @@ input/*.mkv
 *.tsbuildinfo
 server/python/venv/
 server/python/models/*.task
+__pycache__/
 .DS_Store
 .env
