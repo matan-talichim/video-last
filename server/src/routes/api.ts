@@ -9,6 +9,7 @@ import type { AppConfig } from '../utils/config.js';
 import { getMediaInfo } from '../utils/ffmpeg.js';
 import { createLogger } from '../utils/logger.js';
 import { runPreprocess } from '../pipeline/steps/preprocess.js';
+import { runPresenterDetection } from '../pipeline/steps/presenter-detection.js';
 
 export function createApiRouter(config: AppConfig): Router {
   const router = Router();
@@ -244,16 +245,44 @@ export function createApiRouter(config: AppConfig): Router {
         frameInterval: (stepOptions.frameInterval as number) ?? 5,
       };
 
-      // Run preprocess in the background (do not await)
-      runPreprocess(jobDir, inputFile, config.ffmpeg, logger, options).catch((err) => {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        logger.error('Process failed', { jobId, error: errorMsg });
-        writeFileSync(
-          statusPath,
-          JSON.stringify({ status: 'error', error: errorMsg }, null, 2),
-          'utf-8',
-        );
-      });
+      // Get presenter detection config
+      const pdConfig = (config as unknown as Record<string, unknown>).presenterDetection as
+        { lipThreshold?: number; vadThreshold?: number; buffer?: number; pythonPath?: string } | undefined;
+      const presenterConfig = {
+        lipThreshold: pdConfig?.lipThreshold ?? 0.15,
+        vadThreshold: pdConfig?.vadThreshold ?? 0.5,
+        buffer: pdConfig?.buffer ?? 0.25,
+        pythonPath: pdConfig?.pythonPath ?? 'python3',
+      };
+
+      // Run preprocess then presenter detection in the background (do not await)
+      runPreprocess(jobDir, inputFile, config.ffmpeg, logger, options)
+        .then(() => {
+          logger.info('Preprocess done, starting presenter detection', { jobId });
+          return runPresenterDetection(jobDir, presenterConfig, logger);
+        })
+        .catch((err) => {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          logger.error('Process failed', { jobId, error: errorMsg });
+          // Read current status to preserve progress info
+          const currentStatus = existsSync(statusPath)
+            ? JSON.parse(readFileSync(statusPath, 'utf-8'))
+            : {};
+          const currentProgress = (currentStatus as Record<string, unknown>).progress ?? {};
+          writeFileSync(
+            statusPath,
+            JSON.stringify({
+              ...currentStatus,
+              status: 'error',
+              error: errorMsg,
+              progress: {
+                ...(currentProgress as Record<string, unknown>),
+                presenterDetection: { status: 'error', error: errorMsg },
+              },
+            }, null, 2),
+            'utf-8',
+          );
+        });
 
       res.json({ jobId, status: 'processing' });
     } catch (err) {
@@ -286,6 +315,7 @@ export function createApiRouter(config: AppConfig): Router {
             audio: { status: 'pending' },
             proxy: { status: 'pending' },
             frames: { status: 'pending' },
+            presenterDetection: { status: 'pending' },
           },
         });
         return;

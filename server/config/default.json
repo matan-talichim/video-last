@@ -34,6 +34,12 @@
       }
     ]
   },
+  "presenterDetection": {
+    "lipThreshold": 0.15,
+    "vadThreshold": 0.5,
+    "buffer": 0.25,
+    "pythonPath": "python3"
+  },
   "ffmpeg": {
     "path": "ffmpeg",
     "ffprobePath": "ffprobe",

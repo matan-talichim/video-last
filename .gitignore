@@ -9,5 +9,7 @@ input/*.avi
 input/*.mkv
 *.temp
 *.tsbuildinfo
+server/python/venv/
+server/python/models/*.task
 .DS_Store
 .env

@@ -88,6 +88,7 @@
     "extractAudio": "Audio extraction",
     "createProxy": "Creating analysis video",
     "extractFrames": "Frame extraction",
+    "presenterDetection": "Speaker detection",
     "pending": "Pending",
     "inProgress": "Processing...",
     "completed": "Completed",
