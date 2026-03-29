@@ -144,17 +144,18 @@ function AnalysisPage() {
   );
 }
 
-function StepRow({ label, step }: { label: string; step: SubStepProgress }) {
+function StepRow({ label, step }: { label: string; step?: SubStepProgress }) {
   const { t } = useTranslation();
+  const safeStep = step ?? { status: 'pending' as SubStepStatus };
 
   return (
     <div className="flex items-center justify-between rounded-lg border border-gray-700 bg-gray-800 px-4 py-3">
       <div className="flex items-center gap-3">
-        <StatusIcon status={step.status} />
+        <StatusIcon status={safeStep.status} />
         <span className="font-medium text-gray-200">{label}</span>
       </div>
       <span className="text-sm text-gray-400">
-        <StatusLabel status={step.status} durationMs={step.durationMs} t={t} />
+        <StatusLabel status={safeStep.status} durationMs={safeStep.durationMs} t={t} />
       </span>
     </div>
   );
