@@ -39,6 +39,10 @@
     "timeout": 60000,
     "maxTokens": 4096
   },
+  "analysis": {
+    "timeout": 120000,
+    "maxFrames": 10
+  },
   "transcription": {
     "model": "nova-3",
     "language": "he",

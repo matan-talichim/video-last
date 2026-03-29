@@ -12,6 +12,7 @@ import { runPreprocess } from '../pipeline/steps/preprocess.js';
 import { runPresenterDetection } from '../pipeline/steps/presenter-detection.js';
 import { runTranscription } from '../pipeline/steps/transcription.js';
 import { runMergeAndClean } from '../pipeline/steps/merge-and-clean.js';
+import { runAnalyze } from '../pipeline/steps/analyze.js';
 import type { AIBrain } from '../utils/ai-client.js';
 
 export function createApiRouter(config: AppConfig): Router {
@@ -289,6 +290,10 @@ export function createApiRouter(config: AppConfig): Router {
           logger.info('Transcription done, starting merge and clean', { jobId });
           return runMergeAndClean(jobDir, aiBrain, logger);
         })
+        .then(() => {
+          logger.info('Merge and clean done, starting analysis', { jobId });
+          return runAnalyze(jobDir, aiBrain, logger);
+        })
         .catch((err) => {
           const errorMsg = err instanceof Error ? err.message : String(err);
           logger.error('Process failed', { jobId, error: errorMsg });
@@ -345,6 +350,7 @@ export function createApiRouter(config: AppConfig): Router {
             presenterDetection: { status: 'pending' },
             transcription: { status: 'pending' },
             mergeAndClean: { status: 'pending' },
+            analysis: { status: 'pending' },
           },
         });
         return;
@@ -355,6 +361,72 @@ export function createApiRouter(config: AppConfig): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('Status fetch failed', { error: message });
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // ──────────────────────────────────────────
+  // GET /api/jobs/:jobId/analysis
+  // ──────────────────────────────────────────
+  router.get('/jobs/:jobId/analysis', (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const jobDir = resolve(config.editor.inputDir, jobId!);
+
+      if (!existsSync(jobDir)) {
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const analysisPath = resolve(jobDir, 'analysis.json');
+      if (!existsSync(analysisPath)) {
+        res.status(404).json({ error: 'Analysis not ready yet' });
+        return;
+      }
+
+      const analysisData = JSON.parse(readFileSync(analysisPath, 'utf-8'));
+      res.json(analysisData);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Analysis fetch failed', { error: message });
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // ──────────────────────────────────────────
+  // POST /api/jobs/:jobId/analysis/approve
+  // ──────────────────────────────────────────
+  router.post('/jobs/:jobId/analysis/approve', (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const jobDir = resolve(config.editor.inputDir, jobId!);
+
+      if (!existsSync(jobDir)) {
+        logger.warn('Approve — job not found', { jobId });
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const plan = req.body;
+      const approvedPath = resolve(jobDir, 'approved_plan.json');
+      writeFileSync(approvedPath, JSON.stringify(plan, null, 2), 'utf-8');
+
+      // Update status
+      const statusPath = resolve(jobDir, 'status.json');
+      if (existsSync(statusPath)) {
+        const currentStatus = JSON.parse(readFileSync(statusPath, 'utf-8')) as Record<string, unknown>;
+        writeFileSync(statusPath, JSON.stringify({
+          ...currentStatus,
+          status: 'plan_approved',
+        }, null, 2), 'utf-8');
+      }
+
+      logger.info('Plan approved', { jobId });
+
+      res.json({ status: 'plan_approved' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Plan approval failed', { error: message });
       res.status(500).json({ error: message });
     }
   });

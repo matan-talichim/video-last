@@ -12,8 +12,9 @@ interface SubStepProgress {
 
 interface JobStatus {
   jobId: string;
-  status: 'idle' | 'processing' | 'preprocessed' | 'presenter_detected' | 'transcribed' | 'cleaned' | 'error';
+  status: 'idle' | 'processing' | 'preprocessed' | 'presenter_detected' | 'transcribed' | 'cleaned' | 'analyzed' | 'error';
   currentStep?: string;
+  error?: string;
   progress?: {
     audio: SubStepProgress;
     proxy: SubStepProgress;
@@ -21,6 +22,7 @@ interface JobStatus {
     presenterDetection: SubStepProgress;
     transcription: SubStepProgress;
     mergeAndClean: SubStepProgress;
+    analysis: SubStepProgress;
   };
 }
 
@@ -43,7 +45,7 @@ function AnalysisPage() {
         const data = (await res.json()) as JobStatus;
         setJobStatus(data);
 
-        if (data.status === 'cleaned' || data.status === 'error') {
+        if (data.status === 'analyzed' || data.status === 'error') {
           if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
@@ -93,9 +95,29 @@ function AnalysisPage() {
     presenterDetection: { status: 'pending' as SubStepStatus },
     transcription: { status: 'pending' as SubStepStatus },
     mergeAndClean: { status: 'pending' as SubStepStatus },
+    analysis: { status: 'pending' as SubStepStatus },
   };
 
-  const isDone = jobStatus?.status === 'cleaned';
+  const isDone = jobStatus?.status === 'analyzed';
+  const isError = jobStatus?.status === 'error';
+
+  const handleRetry = async () => {
+    setStartError(false);
+    startedRef.current = false;
+
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/process`, { method: 'POST' });
+      if (!res.ok) {
+        setStartError(true);
+        return;
+      }
+
+      pollRef.current = setInterval(pollStatus, POLL_INTERVAL);
+      pollStatus();
+    } catch {
+      setStartError(true);
+    }
+  };
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -103,10 +125,18 @@ function AnalysisPage() {
 
       <div className="w-full max-w-lg rounded-xl border border-gray-800 bg-gray-900 px-8 py-8">
         {startError ? (
-          <p className="text-center text-red-400">{t('analysis.startError')}</p>
+          <div className="flex flex-col items-center gap-4">
+            <p className="text-center text-red-400">{t('analysis.startError')}</p>
+            <button
+              onClick={handleRetry}
+              className="rounded-xl bg-blue-600 px-6 py-2.5 text-white transition-colors hover:bg-blue-500"
+            >
+              {t('analysis.retry')}
+            </button>
+          </div>
         ) : (
           <>
-            {!isDone && (
+            {!isDone && !isError && (
               <p className="mb-6 text-center text-lg text-gray-300">{t('analysis.processing')}</p>
             )}
 
@@ -135,12 +165,38 @@ function AnalysisPage() {
                 label={t('analysis.mergeAndClean')}
                 step={progress.mergeAndClean}
               />
+              <StepRow
+                label={t('analysis.analyze')}
+                step={progress.analysis}
+              />
             </div>
 
+            {isError && (
+              <div className="mt-6 flex flex-col items-center gap-3">
+                <p className="text-center text-red-400">
+                  {jobStatus?.error ?? t('analysis.error')}
+                </p>
+                <button
+                  onClick={handleRetry}
+                  className="rounded-xl bg-blue-600 px-6 py-2.5 text-white transition-colors hover:bg-blue-500"
+                >
+                  {t('analysis.retry')}
+                </button>
+              </div>
+            )}
+
             {isDone && (
-              <p className="mt-6 text-center text-lg font-semibold text-green-400">
-                {t('analysis.allDone')}
-              </p>
+              <div className="mt-6 flex flex-col items-center gap-4">
+                <p className="text-center text-lg font-semibold text-green-400">
+                  {t('analysis.allDone')}
+                </p>
+                <button
+                  onClick={() => navigate(`/preview/${jobId}`)}
+                  className="rounded-xl bg-blue-600 px-8 py-3 text-lg font-semibold text-white transition-colors hover:bg-blue-500"
+                >
+                  {t('preview.viewPlan')}
+                </button>
+              </div>
             )}
           </>
         )}
@@ -176,13 +232,13 @@ function StepRow({ label, step }: { label: string; step?: SubStepProgress }) {
 function StatusIcon({ status }: { status: SubStepStatus }) {
   switch (status) {
     case 'done':
-      return <span className="text-xl text-green-400">✓</span>;
+      return <span className="text-xl text-green-400">&#x2713;</span>;
     case 'processing':
       return (
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400" />
       );
     case 'error':
-      return <span className="text-xl text-red-400">✗</span>;
+      return <span className="text-xl text-red-400">&#x2717;</span>;
     default:
       return <span className="h-5 w-5 rounded-full border-2 border-gray-600" />;
   }
