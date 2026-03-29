@@ -12,12 +12,13 @@ interface SubStepProgress {
 
 interface JobStatus {
   jobId: string;
-  status: 'idle' | 'processing' | 'preprocessed' | 'error';
+  status: 'idle' | 'processing' | 'preprocessed' | 'presenter_detected' | 'error';
   currentStep?: string;
   progress?: {
     audio: SubStepProgress;
     proxy: SubStepProgress;
     frames: SubStepProgress;
+    presenterDetection: SubStepProgress;
   };
 }
 
@@ -40,7 +41,7 @@ function AnalysisPage() {
         const data = (await res.json()) as JobStatus;
         setJobStatus(data);
 
-        if (data.status === 'preprocessed' || data.status === 'error') {
+        if (data.status === 'presenter_detected' || data.status === 'error') {
           if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
@@ -87,9 +88,10 @@ function AnalysisPage() {
     audio: { status: 'pending' as SubStepStatus },
     proxy: { status: 'pending' as SubStepStatus },
     frames: { status: 'pending' as SubStepStatus },
+    presenterDetection: { status: 'pending' as SubStepStatus },
   };
 
-  const isDone = jobStatus?.status === 'preprocessed';
+  const isDone = jobStatus?.status === 'presenter_detected';
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -116,6 +118,10 @@ function AnalysisPage() {
               <StepRow
                 label={t('analysis.extractFrames')}
                 step={progress.frames}
+              />
+              <StepRow
+                label={t('analysis.presenterDetection')}
+                step={progress.presenterDetection}
               />
             </div>
 

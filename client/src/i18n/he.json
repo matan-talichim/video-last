@@ -88,6 +88,7 @@
     "extractAudio": "חילוץ אודיו",
     "createProxy": "יצירת וידאו לניתוח",
     "extractFrames": "חילוץ פריימים",
+    "presenterDetection": "זיהוי דובר",
     "pending": "ממתין",
     "inProgress": "מעבד...",
     "completed": "הושלם",
