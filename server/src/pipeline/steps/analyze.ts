@@ -65,7 +65,35 @@ function writeStatus(statusPath: string, update: Record<string, unknown>): void 
   writeFileSync(statusPath, JSON.stringify(merged, null, 2), 'utf-8');
 }
 
-async function loadFramesAsBase64(framesDir: string, maxFrames: number, logger: Logger): Promise<string[]> {
+function parseFrameTimestamp(fileName: string): number {
+  // Extract timestamp from frame filename, e.g. "frame_00005.jpg" → 5s, "frame_00012.500.jpg" → 12.5s
+  const match = fileName.match(/(\d+(?:\.\d+)?)/);
+  return match ? parseFloat(match[1]!) : 0;
+}
+
+function isInSpeechSegment(
+  timestamp: number,
+  segments: Array<{ start: number; end: number }>,
+): boolean {
+  return segments.some((s) => timestamp >= s.start && timestamp <= s.end);
+}
+
+function selectEvenlySpaced(files: string[], count: number): string[] {
+  if (files.length <= count) return [...files];
+  const step = (files.length - 1) / (count - 1);
+  const result: string[] = [];
+  for (let i = 0; i < count; i++) {
+    result.push(files[Math.round(i * step)]!);
+  }
+  return result;
+}
+
+async function loadFramesAsBase64(
+  framesDir: string,
+  maxFrames: number,
+  presenterSegments: PresenterSegments | null,
+  logger: Logger,
+): Promise<string[]> {
   if (!existsSync(framesDir)) {
     logger.warn('Frames directory not found, skipping vision input', { framesDir });
     return [];
@@ -80,28 +108,78 @@ async function loadFramesAsBase64(framesDir: string, maxFrames: number, logger: 
     return [];
   }
 
-  // Select evenly spaced frames
-  const step = Math.max(1, Math.floor(frameFiles.length / maxFrames));
-  const selected: string[] = [];
-  for (let i = 0; i < frameFiles.length && selected.length < maxFrames; i += step) {
-    const filePath = join(framesDir, frameFiles[i]!);
+  // Split frames into speech vs silence based on presenter segments
+  let selectedFiles: string[];
+
+  if (presenterSegments && presenterSegments.segments.length > 0) {
+    const speechFrames: string[] = [];
+    const silenceFrames: string[] = [];
+
+    for (const file of frameFiles) {
+      const ts = parseFrameTimestamp(file);
+      if (isInSpeechSegment(ts, presenterSegments.segments)) {
+        speechFrames.push(file);
+      } else {
+        silenceFrames.push(file);
+      }
+    }
+
+    // Always include first and last frame
+    const first = frameFiles[0]!;
+    const last = frameFiles[frameFiles.length - 1]!;
+
+    if (speechFrames.length >= maxFrames) {
+      // More speech frames than needed — pick evenly spaced subset
+      selectedFiles = selectEvenlySpaced(speechFrames, maxFrames);
+    } else {
+      // Take all speech frames, fill remainder with evenly spaced silence frames
+      const remaining = maxFrames - speechFrames.length;
+      const fillerFrames = selectEvenlySpaced(silenceFrames, remaining);
+      selectedFiles = [...speechFrames, ...fillerFrames];
+    }
+
+    // Ensure first and last are included
+    if (!selectedFiles.includes(first)) {
+      selectedFiles[0] = first;
+    }
+    if (!selectedFiles.includes(last)) {
+      selectedFiles[selectedFiles.length - 1] = last;
+    }
+
+    // Sort by filename to maintain chronological order
+    selectedFiles.sort();
+
+    const speechCount = selectedFiles.filter((f) =>
+      isInSpeechSegment(parseFrameTimestamp(f), presenterSegments.segments),
+    ).length;
+
+    logger.info(`Selected ${selectedFiles.length} meaningful frames (${speechCount} from speech, ${selectedFiles.length - speechCount} from silence)`);
+  } else {
+    // No presenter segments — fall back to evenly spaced
+    selectedFiles = selectEvenlySpaced(frameFiles, maxFrames);
+    logger.info(`Selected ${selectedFiles.length} evenly spaced frames (no presenter segments available)`);
+  }
+
+  // Compress selected frames
+  const result: string[] = [];
+  for (const file of selectedFiles) {
+    const filePath = join(framesDir, file);
     const rawBuffer = readFileSync(filePath);
 
-    // Compress to 480p max height, JPEG quality 65
     const compressed = await sharp(rawBuffer)
       .resize({ height: 480, withoutEnlargement: true })
       .jpeg({ quality: 65 })
       .toBuffer();
 
-    selected.push(compressed.toString('base64'));
+    result.push(compressed.toString('base64'));
   }
 
   logger.info('Loaded and compressed frames for analysis', {
     totalFrames: frameFiles.length,
-    selectedFrames: selected.length,
+    selectedFrames: result.length,
   });
 
-  return selected;
+  return result;
 }
 
 // ── Main exported function ──────────────────────
@@ -156,7 +234,7 @@ export async function runAnalyze(
   const timeout = analysisConfig?.timeout ?? 120000;
 
   const framesDir = join(jobDir, 'frames');
-  const frames = await loadFramesAsBase64(framesDir, maxFrames, logger);
+  const frames = await loadFramesAsBase64(framesDir, maxFrames, presenterSegments, logger);
 
   // 5. Build system prompt
   const systemPrompt = getAnalyzerPrompt({

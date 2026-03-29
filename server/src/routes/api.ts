@@ -481,7 +481,9 @@ ${currentAnalysis}
 ${notes}
 
 עדכן את התוכנית לפי ההערות. החזר JSON מלא באותו פורמט בדיוק, עם השינויים שהמשתמש ביקש.
-אל תשנה דברים שהמשתמש לא ביקש לשנות.`;
+אל תשנה דברים שהמשתמש לא ביקש לשנות.
+
+חשוב מאוד: החזר JSON תקין בלבד. וודא שאין פסיקים מיותרים לפני } או ]. וודא שכל string סגור עם גרשיים. אל תוסיף טקסט לפני או אחרי ה-JSON.`;
 
       const { data, usage } = await askAIJSON(revisionPrompt, {
         brain: aiBrain,
@@ -507,7 +509,13 @@ ${notes}
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('Revision failed', { jobId, error: message });
-      res.status(500).json({ error: message });
+
+      const isJsonError = message.includes('invalid JSON') || message.includes('JSON at position');
+      res.status(isJsonError ? 502 : 500).json({
+        error: isJsonError
+          ? 'המוח החזיר תשובה לא תקינה, נסה שוב'
+          : message,
+      });
     }
   });
 
