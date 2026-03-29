@@ -41,10 +41,17 @@ function extractJSON(raw: string): string {
   if (fenceMatch) {
     return fenceMatch[1]!.trim();
   }
-  // Try to find raw JSON object or array
-  const jsonMatch = raw.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (jsonMatch) {
-    return jsonMatch[1]!.trim();
+  // Find outermost JSON object: first { to last }
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return raw.slice(firstBrace, lastBrace + 1);
+  }
+  // Try array: first [ to last ]
+  const firstBracket = raw.indexOf('[');
+  const lastBracket = raw.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    return raw.slice(firstBracket, lastBracket + 1);
   }
   return raw.trim();
 }
