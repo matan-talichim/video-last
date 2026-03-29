@@ -219,8 +219,17 @@ export function createApiRouter(config: AppConfig): Router {
 
       const inputFile = resolve(jobDir, files[0]!);
 
-      // Update status to processing
+      // Guard: reject if already processing
       const statusPath = resolve(jobDir, 'status.json');
+      if (existsSync(statusPath)) {
+        const current = JSON.parse(readFileSync(statusPath, 'utf-8')) as { status: string };
+        if (current.status === 'processing') {
+          logger.warn('Process — already running', { jobId });
+          res.status(409).json({ error: 'Job is already processing' });
+          return;
+        }
+      }
+
       writeFileSync(statusPath, JSON.stringify({ status: 'processing' }, null, 2), 'utf-8');
 
       logger.info('Process started', { jobId, inputFile });
