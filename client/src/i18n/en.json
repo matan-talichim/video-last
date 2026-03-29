@@ -127,6 +127,9 @@
     "approving": "Approving...",
     "backToSettings": "Back to settings",
     "viewPlan": "View editing plan",
+    "revisionNotes": "Have feedback? Write what you'd like to change...",
+    "revise": "Update plan",
+    "revising": "Updating plan...",
     "loading": "Loading editing plan...",
     "errorLoading": "Failed to load editing plan",
     "risk": {

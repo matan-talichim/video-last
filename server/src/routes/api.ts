@@ -13,6 +13,7 @@ import { runPresenterDetection } from '../pipeline/steps/presenter-detection.js'
 import { runTranscription } from '../pipeline/steps/transcription.js';
 import { runMergeAndClean } from '../pipeline/steps/merge-and-clean.js';
 import { runAnalyze } from '../pipeline/steps/analyze.js';
+import { askAIJSON } from '../utils/ai-client.js';
 import type { AIBrain } from '../utils/ai-client.js';
 
 export function createApiRouter(config: AppConfig): Router {
@@ -427,6 +428,85 @@ export function createApiRouter(config: AppConfig): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('Plan approval failed', { error: message });
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // ──────────────────────────────────────────
+  // POST /api/jobs/:jobId/analysis/revise
+  // ──────────────────────────────────────────
+  router.post('/jobs/:jobId/analysis/revise', async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    const { jobId } = req.params;
+
+    try {
+      const jobDir = resolve(config.editor.inputDir, jobId!);
+
+      if (!existsSync(jobDir)) {
+        logger.warn('Revise — job not found', { jobId });
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const analysisPath = resolve(jobDir, 'analysis.json');
+      if (!existsSync(analysisPath)) {
+        logger.warn('Revise — analysis not found', { jobId });
+        res.status(404).json({ error: 'Analysis not found' });
+        return;
+      }
+
+      const { notes } = req.body as { notes?: string };
+      if (!notes || notes.trim().length === 0) {
+        logger.warn('Revise — empty notes', { jobId });
+        res.status(400).json({ error: 'Notes are required' });
+        return;
+      }
+
+      // Read current analysis and settings
+      const currentAnalysis = readFileSync(analysisPath, 'utf-8');
+      const settingsPath = resolve(jobDir, 'settings.json');
+      const settings = existsSync(settingsPath)
+        ? (JSON.parse(readFileSync(settingsPath, 'utf-8')) as { aiBrain?: string })
+        : {};
+      const aiBrain: AIBrain = settings.aiBrain === 'gpt_5_4' ? 'gpt_5_4' : 'claude_sonnet_4_6';
+
+      logger.info('Revision request', { jobId, brain: aiBrain, notesLength: notes.length });
+
+      const revisionPrompt = `קיבלת תוכנית עריכה קודמת והמשתמש ביקש שינויים.
+
+תוכנית נוכחית:
+${currentAnalysis}
+
+הערות המשתמש:
+${notes}
+
+עדכן את התוכנית לפי ההערות. החזר JSON מלא באותו פורמט בדיוק, עם השינויים שהמשתמש ביקש.
+אל תשנה דברים שהמשתמש לא ביקש לשנות.`;
+
+      const { data, usage } = await askAIJSON(revisionPrompt, {
+        brain: aiBrain,
+        maxTokens: (config.ai as { maxTokens?: number })?.maxTokens ?? 4096,
+        timeout: (config.analysis as { timeout?: number })?.timeout ?? 120000,
+        logger,
+      });
+
+      // Save revised analysis
+      writeFileSync(analysisPath, JSON.stringify(data, null, 2), 'utf-8');
+
+      const elapsed = Date.now() - startTime;
+      logger.info('Revision completed', {
+        jobId,
+        brain: aiBrain,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        costUSD: usage.estimatedCostUSD,
+        elapsed: `${elapsed}ms`,
+      });
+
+      res.json(data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Revision failed', { jobId, error: message });
       res.status(500).json({ error: message });
     }
   });
