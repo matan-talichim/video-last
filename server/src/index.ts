@@ -1,3 +1,5 @@
+console.error('DEBUG: server starting, loading imports…');
+
 import express from 'express';
 import cors from 'cors';
 import { resolve } from 'node:path';
@@ -10,6 +12,8 @@ import { createApiRouter } from './routes/api.js';
 // Register pipeline steps
 import './pipeline/steps/passthrough.js';
 import './pipeline/steps/preprocess.js';
+
+console.error('DEBUG: all imports loaded, initializing config…');
 
 const config = loadConfig();
 const logger = createLogger({
