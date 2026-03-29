@@ -49,9 +49,9 @@
     "paragraphs": true
   },
   "presenterDetection": {
-    "lipThreshold": 0.15,
-    "vadThreshold": 0.5,
-    "buffer": 0.25,
+    "lipThreshold": 0.25,
+    "vadThreshold": 0.75,
+    "buffer": 0.1,
     "pythonPath": "python3"
   },
   "ffmpeg": {

@@ -11,9 +11,9 @@ Usage:
         --audio /path/to/audio.wav \
         --video /path/to/proxy.mp4 \
         --output /path/to/presenter_segments.json \
-        --lip-threshold 0.15 \
-        --vad-threshold 0.5 \
-        --buffer 0.25
+        --lip-threshold 0.25 \
+        --vad-threshold 0.75 \
+        --buffer 0.1
 """
 
 import argparse
@@ -209,7 +209,6 @@ def run_lip_detection(
     log(f"Video FPS: {fps:.1f}, analyzing lip motion in {len(vad_segments)} segments")
 
     results = []
-    prev_face_center = None
 
     for seg_idx, segment in enumerate(vad_segments):
         start_time = segment["start"]
@@ -223,6 +222,8 @@ def run_lip_detection(
 
         lip_moving_frames = 0
         total_frames = 0
+        # Reset face center tracking per segment (we seek to a new position)
+        prev_face_center = None
 
         for frame_num in range(start_frame, end_frame + 1):
             ret, frame = cap.read()
@@ -258,7 +259,7 @@ def run_lip_detection(
             normalized_lip, face_width = compute_lip_distance(presenter_landmarks)
 
             # Body motion filtering: if the whole face moved significantly
-            # but normalized lip distance stayed constant, it's not speech
+            # between frames, it's body/camera motion, not speech
             current_center = get_face_center(presenter_landmarks)
             is_body_motion = False
             if prev_face_center is not None:
@@ -266,8 +267,10 @@ def run_lip_detection(
                     (current_center[0] - prev_face_center[0]) ** 2
                     + (current_center[1] - prev_face_center[1]) ** 2
                 )
-                # If face center moved more than 5% of face width, might be body motion
-                if face_width > 0 and center_delta > 0.05 * face_width:
+                # If face center moved more than 20% of face width, it's body motion
+                # (previous 5% threshold was too aggressive — normal head movement
+                # during speech easily exceeds it, causing confidence to be 0.0)
+                if face_width > 0 and center_delta > 0.20 * face_width:
                     is_body_motion = True
 
             prev_face_center = current_center
@@ -275,7 +278,7 @@ def run_lip_detection(
             if normalized_lip > lip_threshold and not is_body_motion:
                 lip_moving_frames += 1
 
-        # Calculate confidence
+        # Calculate confidence: ratio of lip-moving frames to total frames
         confidence = lip_moving_frames / total_frames if total_frames > 0 else 0.0
 
         results.append({
@@ -368,9 +371,9 @@ def main() -> None:
     parser.add_argument("--audio", required=True, help="Path to audio.wav (16kHz mono)")
     parser.add_argument("--video", required=True, help="Path to proxy.mp4")
     parser.add_argument("--output", required=True, help="Path for output JSON")
-    parser.add_argument("--lip-threshold", type=float, default=0.15, help="Normalized lip distance threshold (default: 0.15)")
-    parser.add_argument("--vad-threshold", type=float, default=0.5, help="VAD speech probability threshold (default: 0.5)")
-    parser.add_argument("--buffer", type=float, default=0.25, help="Buffer in seconds to add around segments (default: 0.25)")
+    parser.add_argument("--lip-threshold", type=float, default=0.25, help="Normalized lip distance threshold (default: 0.25)")
+    parser.add_argument("--vad-threshold", type=float, default=0.75, help="VAD speech probability threshold (default: 0.75)")
+    parser.add_argument("--buffer", type=float, default=0.1, help="Buffer in seconds to add around segments (default: 0.1)")
     args = parser.parse_args()
 
     start_time = time.time()

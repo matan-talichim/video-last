@@ -216,9 +216,9 @@ async function presenterDetection(context: StepContext): Promise<StepResult> {
   const { outputDir, logger, config } = context;
 
   const presenterConfig: PresenterDetectionConfig = {
-    lipThreshold: (config.lipThreshold as number) ?? 0.15,
-    vadThreshold: (config.vadThreshold as number) ?? 0.5,
-    buffer: (config.buffer as number) ?? 0.25,
+    lipThreshold: (config.lipThreshold as number) ?? 0.25,
+    vadThreshold: (config.vadThreshold as number) ?? 0.75,
+    buffer: (config.buffer as number) ?? 0.1,
     pythonPath: (config.pythonPath as string) ?? 'python3',
   };
 
