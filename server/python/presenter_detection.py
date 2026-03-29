@@ -469,9 +469,9 @@ def main() -> None:
         seg_duration = seg["end"] - seg["start"]
         conf = seg["confidence"]
 
-        if conf <= 0.15:
+        if conf <= 0.18:
             log(f"    Filtered out segment {seg['start']:.2f}-{seg['end']:.2f}s "
-                f"(confidence {conf:.3f} <= 0.15)")
+                f"(confidence {conf:.3f} <= 0.18)")
             continue
 
         if seg_duration > 10 and conf < 0.3:
