@@ -80,7 +80,7 @@ function runCommand(
 }
 
 async function ensureVenv(logger: Logger): Promise<string> {
-  const scriptDir = resolve('server/python');
+  const scriptDir = resolve('python');
   const venvPython = join(scriptDir, 'venv', 'bin', 'python3');
 
   if (existsSync(venvPython)) {
@@ -148,7 +148,7 @@ export async function runPresenterDetection(
     }
   }
 
-  const scriptPath = resolve('server/python/presenter_detection.py');
+  const scriptPath = resolve('python/presenter_detection.py');
   if (!existsSync(scriptPath)) {
     throw new Error(`Python script not found: ${scriptPath}`);
   }
