@@ -132,6 +132,9 @@ function PreviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [brollChecked, setBrollChecked] = useState<boolean[]>([]);
+  const [revisionNotes, setRevisionNotes] = useState('');
+  const [revising, setRevising] = useState(false);
+  const [revisionError, setRevisionError] = useState<string | null>(null);
 
   const fetchAnalysis = useCallback(async () => {
     try {
@@ -178,6 +181,35 @@ function PreviewPage() {
       // Silently fail
     } finally {
       setApproving(false);
+    }
+  };
+
+  const handleRevise = async () => {
+    if (!revisionNotes.trim()) return;
+    setRevising(true);
+    setRevisionError(null);
+
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/analysis/revise`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: revisionNotes }),
+      });
+
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        setRevisionError(err.error ?? 'Unknown error');
+        return;
+      }
+
+      const data = (await res.json()) as AnalysisData;
+      setAnalysis(data);
+      setBrollChecked(data.brollSuggestions?.map(() => true) ?? []);
+      setRevisionNotes('');
+    } catch {
+      setRevisionError('Network error');
+    } finally {
+      setRevising(false);
     }
   };
 
@@ -405,7 +437,36 @@ function PreviewPage() {
         </div>
       </Card>
 
-      {/* Section 8 — Action Buttons */}
+      {/* Section 8 — Revision Notes */}
+      <Card title={t('preview.revisionNotes')}>
+        <textarea
+          value={revisionNotes}
+          onChange={(e) => setRevisionNotes(e.target.value)}
+          placeholder={t('preview.revisionNotes')}
+          disabled={revising}
+          className="w-full rounded-lg border border-gray-700 bg-gray-800 p-3 text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:outline-none disabled:opacity-50"
+          rows={3}
+        />
+        {revisionError && (
+          <p className="mt-2 text-sm text-red-400">{revisionError}</p>
+        )}
+        <button
+          onClick={handleRevise}
+          disabled={revising || !revisionNotes.trim()}
+          className="mt-3 rounded-xl bg-blue-600 px-6 py-2.5 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
+        >
+          {revising ? (
+            <span className="flex items-center gap-2">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              {t('preview.revising')}
+            </span>
+          ) : (
+            t('preview.revise')
+          )}
+        </button>
+      </Card>
+
+      {/* Section 9 — Action Buttons */}
       <div className="flex items-center justify-center gap-4">
         <button
           onClick={() => navigate(`/settings/${jobId}`)}
