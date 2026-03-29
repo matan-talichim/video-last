@@ -458,9 +458,35 @@ def main() -> None:
             for s in vad_segments
         ]
 
+    # Step 2b: Filter by confidence
+    log("=== Step 2b: Filtering segments by confidence ===")
+    pre_filter_count = len(segments_with_confidence)
+
+    # Fix 1: Discard segments where lips moved in ≤15% of frames (likely not the presenter)
+    # Fix 2: Discard long segments (>10s) with low confidence (<0.3) — likely production assistant talking
+    filtered_segments = []
+    for seg in segments_with_confidence:
+        seg_duration = seg["end"] - seg["start"]
+        conf = seg["confidence"]
+
+        if conf <= 0.15:
+            log(f"    Filtered out segment {seg['start']:.2f}-{seg['end']:.2f}s "
+                f"(confidence {conf:.3f} <= 0.15)")
+            continue
+
+        if seg_duration > 10 and conf < 0.3:
+            log(f"    Filtered out long segment {seg['start']:.2f}-{seg['end']:.2f}s "
+                f"({seg_duration:.1f}s, confidence {conf:.3f} < 0.3)")
+            continue
+
+        filtered_segments.append(seg)
+
+    log(f"  Confidence filter: {pre_filter_count} -> {len(filtered_segments)} segments "
+        f"({pre_filter_count - len(filtered_segments)} removed)")
+
     # Step 3: Merge and finalize
     log("=== Step 3: Merging segments ===")
-    final_segments = merge_segments(segments_with_confidence, args.buffer, video_duration)
+    final_segments = merge_segments(filtered_segments, args.buffer, video_duration)
 
     # Calculate totals
     total_speech = sum(s["end"] - s["start"] for s in final_segments)
