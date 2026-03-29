@@ -39,18 +39,56 @@ def log_error(msg: str) -> None:
 
 # ── Step 1: Voice Activity Detection ────────────────────────────────
 
+def read_wav_as_tensor(audio_path: str, target_sr: int = 16000):
+    """Read a WAV file and return a torch tensor at the target sample rate."""
+    import torch
+    import wave
+    import struct
+
+    with wave.open(audio_path, 'rb') as wf:
+        n_channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        n_frames = wf.getnframes()
+        raw_data = wf.readframes(n_frames)
+
+    if sampwidth == 2:
+        fmt = f'<{n_frames * n_channels}h'
+        samples = struct.unpack(fmt, raw_data)
+        audio_np = np.array(samples, dtype=np.float32) / 32768.0
+    elif sampwidth == 4:
+        fmt = f'<{n_frames * n_channels}i'
+        samples = struct.unpack(fmt, raw_data)
+        audio_np = np.array(samples, dtype=np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"Unsupported sample width: {sampwidth}")
+
+    # Convert to mono if stereo
+    if n_channels > 1:
+        audio_np = audio_np.reshape(-1, n_channels).mean(axis=1)
+
+    # Simple resample if needed (linear interpolation)
+    if framerate != target_sr:
+        duration = len(audio_np) / framerate
+        target_len = int(duration * target_sr)
+        indices = np.linspace(0, len(audio_np) - 1, target_len)
+        audio_np = np.interp(indices, np.arange(len(audio_np)), audio_np).astype(np.float32)
+
+    return torch.from_numpy(audio_np)
+
+
 def run_vad(audio_path: str, vad_threshold: float) -> list[dict]:
     """Run Silero VAD on audio file, return list of {start, end} in seconds."""
     import torch
     torch.set_num_threads(1)
 
-    from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
+    from silero_vad import load_silero_vad, get_speech_timestamps
 
     log(f"Loading Silero VAD model...")
     model = load_silero_vad()
 
     log(f"Reading audio: {audio_path}")
-    audio = read_audio(audio_path, sampling_rate=16000)
+    audio = read_wav_as_tensor(audio_path, target_sr=16000)
 
     log(f"Running VAD (threshold={vad_threshold})...")
     speech_timestamps = get_speech_timestamps(
