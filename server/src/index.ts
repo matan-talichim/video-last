@@ -1,5 +1,6 @@
 console.error('DEBUG: server starting, loading imports…');
 
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { resolve } from 'node:path';
