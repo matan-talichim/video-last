@@ -154,6 +154,38 @@ async function askGPT(
   }
 }
 
+// ── JSON repair helper ─────────────────────────
+
+function repairJSON(raw: string): string {
+  let s = raw;
+
+  // Remove trailing commas before } or ]
+  s = s.replace(/,\s*([}\]])/g, '$1');
+
+  // Remove double commas
+  s = s.replace(/,\s*,/g, ',');
+
+  // Remove characters after the last } or ]
+  const lastBrace = s.lastIndexOf('}');
+  const lastBracket = s.lastIndexOf(']');
+  const lastClose = Math.max(lastBrace, lastBracket);
+  if (lastClose !== -1 && lastClose < s.length - 1) {
+    s = s.slice(0, lastClose + 1);
+  }
+
+  // Remove characters before the first { or [
+  const firstBrace = s.indexOf('{');
+  const firstBracket = s.indexOf('[');
+  const firstOpen = firstBrace !== -1 && firstBracket !== -1
+    ? Math.min(firstBrace, firstBracket)
+    : firstBrace !== -1 ? firstBrace : firstBracket;
+  if (firstOpen > 0) {
+    s = s.slice(firstOpen);
+  }
+
+  return s;
+}
+
 // ── Public API ──────────────────────────────────
 
 export async function askAI(
@@ -188,6 +220,26 @@ export async function askAIJSON<T = unknown>(
 ): Promise<{ data: T; usage: AIUsage }> {
   const result = await askAI(userPrompt, { ...options, expectJSON: true });
   const cleaned = extractJSON(result.text);
-  const data = JSON.parse(cleaned) as T;
-  return { data, usage: result.usage };
+
+  // Try parsing as-is first
+  try {
+    const data = JSON.parse(cleaned) as T;
+    return { data, usage: result.usage };
+  } catch {
+    options.logger.warn('JSON parse failed, attempting repair', {
+      rawLength: result.text.length,
+    });
+  }
+
+  // Try with repair
+  const repaired = repairJSON(cleaned);
+  try {
+    const data = JSON.parse(repaired) as T;
+    options.logger.info('JSON repair succeeded');
+    return { data, usage: result.usage };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    options.logger.error('JSON repair also failed', { error: message });
+    throw new Error(`AI returned invalid JSON: ${message}`);
+  }
 }
