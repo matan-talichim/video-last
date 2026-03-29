@@ -90,6 +90,7 @@
     "extractFrames": "Frame extraction",
     "presenterDetection": "Speaker detection",
     "transcription": "Transcription",
+    "mergeAndClean": "Content analysis",
     "pending": "Pending",
     "inProgress": "Processing...",
     "completed": "Completed",

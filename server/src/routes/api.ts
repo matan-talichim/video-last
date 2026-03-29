@@ -11,6 +11,8 @@ import { createLogger } from '../utils/logger.js';
 import { runPreprocess } from '../pipeline/steps/preprocess.js';
 import { runPresenterDetection } from '../pipeline/steps/presenter-detection.js';
 import { runTranscription } from '../pipeline/steps/transcription.js';
+import { runMergeAndClean } from '../pipeline/steps/merge-and-clean.js';
+import type { AIBrain } from '../utils/ai-client.js';
 
 export function createApiRouter(config: AppConfig): Router {
   const router = Router();
@@ -269,7 +271,11 @@ export function createApiRouter(config: AppConfig): Router {
         paragraphs: txConfig?.paragraphs ?? true,
       };
 
-      // Run preprocess → presenter detection → transcription in the background (do not await)
+      // Read settings for AI brain selection
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as { aiBrain?: string };
+      const aiBrain: AIBrain = settings.aiBrain === 'gpt_5_4' ? 'gpt_5_4' : 'claude_sonnet_4_6';
+
+      // Run preprocess → presenter detection → transcription → merge-and-clean in the background (do not await)
       runPreprocess(jobDir, inputFile, config.ffmpeg, logger, options)
         .then(() => {
           logger.info('Preprocess done, starting presenter detection', { jobId });
@@ -278,6 +284,10 @@ export function createApiRouter(config: AppConfig): Router {
         .then(() => {
           logger.info('Presenter detection done, starting transcription', { jobId });
           return runTranscription(jobDir, transcriptionConfig, logger);
+        })
+        .then(() => {
+          logger.info('Transcription done, starting merge and clean', { jobId });
+          return runMergeAndClean(jobDir, aiBrain, logger);
         })
         .catch((err) => {
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -334,6 +344,7 @@ export function createApiRouter(config: AppConfig): Router {
             frames: { status: 'pending' },
             presenterDetection: { status: 'pending' },
             transcription: { status: 'pending' },
+            mergeAndClean: { status: 'pending' },
           },
         });
         return;
