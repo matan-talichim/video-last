@@ -12,13 +12,14 @@ interface SubStepProgress {
 
 interface JobStatus {
   jobId: string;
-  status: 'idle' | 'processing' | 'preprocessed' | 'presenter_detected' | 'error';
+  status: 'idle' | 'processing' | 'preprocessed' | 'presenter_detected' | 'transcribed' | 'error';
   currentStep?: string;
   progress?: {
     audio: SubStepProgress;
     proxy: SubStepProgress;
     frames: SubStepProgress;
     presenterDetection: SubStepProgress;
+    transcription: SubStepProgress;
   };
 }
 
@@ -41,7 +42,7 @@ function AnalysisPage() {
         const data = (await res.json()) as JobStatus;
         setJobStatus(data);
 
-        if (data.status === 'presenter_detected' || data.status === 'error') {
+        if (data.status === 'transcribed' || data.status === 'error') {
           if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
@@ -89,9 +90,10 @@ function AnalysisPage() {
     proxy: { status: 'pending' as SubStepStatus },
     frames: { status: 'pending' as SubStepStatus },
     presenterDetection: { status: 'pending' as SubStepStatus },
+    transcription: { status: 'pending' as SubStepStatus },
   };
 
-  const isDone = jobStatus?.status === 'presenter_detected';
+  const isDone = jobStatus?.status === 'transcribed';
 
   return (
     <div className="flex flex-col items-center gap-8">
@@ -122,6 +124,10 @@ function AnalysisPage() {
               <StepRow
                 label={t('analysis.presenterDetection')}
                 step={progress.presenterDetection}
+              />
+              <StepRow
+                label={t('analysis.transcription')}
+                step={progress.transcription}
               />
             </div>
 

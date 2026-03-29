@@ -10,6 +10,7 @@ import { getMediaInfo } from '../utils/ffmpeg.js';
 import { createLogger } from '../utils/logger.js';
 import { runPreprocess } from '../pipeline/steps/preprocess.js';
 import { runPresenterDetection } from '../pipeline/steps/presenter-detection.js';
+import { runTranscription } from '../pipeline/steps/transcription.js';
 
 export function createApiRouter(config: AppConfig): Router {
   const router = Router();
@@ -255,11 +256,28 @@ export function createApiRouter(config: AppConfig): Router {
         pythonPath: pdConfig?.pythonPath ?? 'python3',
       };
 
-      // Run preprocess then presenter detection in the background (do not await)
+      // Get transcription config
+      const txConfig = (config as unknown as Record<string, unknown>).transcription as
+        { model?: string; language?: string; smartFormat?: boolean; utterances?: boolean; punctuate?: boolean; words?: boolean; paragraphs?: boolean } | undefined;
+      const transcriptionConfig = {
+        model: txConfig?.model ?? 'nova-3',
+        language: txConfig?.language ?? 'he',
+        smartFormat: txConfig?.smartFormat ?? true,
+        utterances: txConfig?.utterances ?? true,
+        punctuate: txConfig?.punctuate ?? true,
+        words: txConfig?.words ?? true,
+        paragraphs: txConfig?.paragraphs ?? true,
+      };
+
+      // Run preprocess → presenter detection → transcription in the background (do not await)
       runPreprocess(jobDir, inputFile, config.ffmpeg, logger, options)
         .then(() => {
           logger.info('Preprocess done, starting presenter detection', { jobId });
           return runPresenterDetection(jobDir, presenterConfig, logger);
+        })
+        .then(() => {
+          logger.info('Presenter detection done, starting transcription', { jobId });
+          return runTranscription(jobDir, transcriptionConfig, logger);
         })
         .catch((err) => {
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -277,7 +295,6 @@ export function createApiRouter(config: AppConfig): Router {
               error: errorMsg,
               progress: {
                 ...(currentProgress as Record<string, unknown>),
-                presenterDetection: { status: 'error', error: errorMsg },
               },
             }, null, 2),
             'utf-8',
@@ -316,6 +333,7 @@ export function createApiRouter(config: AppConfig): Router {
             proxy: { status: 'pending' },
             frames: { status: 'pending' },
             presenterDetection: { status: 'pending' },
+            transcription: { status: 'pending' },
           },
         });
         return;

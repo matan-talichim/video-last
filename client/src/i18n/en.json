@@ -89,6 +89,7 @@
     "createProxy": "Creating analysis video",
     "extractFrames": "Frame extraction",
     "presenterDetection": "Speaker detection",
+    "transcription": "Transcription",
     "pending": "Pending",
     "inProgress": "Processing...",
     "completed": "Completed",
