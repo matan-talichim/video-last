@@ -208,6 +208,11 @@ def run_lip_detection(
 
     log(f"Video FPS: {fps:.1f}, analyzing lip motion in {len(vad_segments)} segments")
 
+    # Sliding window size for lip variance detection
+    VARIANCE_WINDOW = 5
+    # Standard deviation threshold: above = active speech, below = static open mouth
+    VARIANCE_THRESHOLD = 0.02
+
     results = []
 
     for seg_idx, segment in enumerate(vad_segments):
@@ -222,8 +227,13 @@ def run_lip_detection(
 
         lip_moving_frames = 0
         total_frames = 0
+        faces_detected_frames = 0
         # Reset face center tracking per segment (we seek to a new position)
         prev_face_center = None
+        # Sliding window of recent lip distances for variance calculation
+        lip_distance_window: list[float] = []
+
+        log(f"  Segment {seg_idx}: {start_time:.2f}-{end_time:.2f}s (frames {start_frame}-{end_frame})")
 
         for frame_num in range(start_frame, end_frame + 1):
             ret, frame = cap.read()
@@ -246,6 +256,8 @@ def run_lip_detection(
             if not detection_result.face_landmarks:
                 continue
 
+            faces_detected_frames += 1
+
             # Find the presenter — face with the largest bounding box area
             best_face_idx = 0
             best_area = 0.0
@@ -267,19 +279,33 @@ def run_lip_detection(
                     (current_center[0] - prev_face_center[0]) ** 2
                     + (current_center[1] - prev_face_center[1]) ** 2
                 )
-                # If face center moved more than 20% of face width, it's body motion
-                # (previous 5% threshold was too aggressive — normal head movement
-                # during speech easily exceeds it, causing confidence to be 0.0)
                 if face_width > 0 and center_delta > 0.20 * face_width:
                     is_body_motion = True
 
             prev_face_center = current_center
 
-            if normalized_lip > lip_threshold and not is_body_motion:
-                lip_moving_frames += 1
+            if is_body_motion:
+                continue
+
+            # Add current lip distance to sliding window
+            lip_distance_window.append(normalized_lip)
+            if len(lip_distance_window) > VARIANCE_WINDOW:
+                lip_distance_window.pop(0)
+
+            # Variance-based speech detection:
+            # Instead of checking if lip distance > threshold (catches static open mouth),
+            # check if lip distances VARY over recent frames (actual speech = lips moving)
+            if len(lip_distance_window) >= VARIANCE_WINDOW:
+                std_dev = float(np.std(lip_distance_window))
+                if std_dev > VARIANCE_THRESHOLD:
+                    lip_moving_frames += 1
 
         # Calculate confidence: ratio of lip-moving frames to total frames
         confidence = lip_moving_frames / total_frames if total_frames > 0 else 0.0
+
+        log(f"    -> faces_detected={faces_detected_frames}/{total_frames}, "
+            f"lip_moving={lip_moving_frames}/{total_frames}, "
+            f"confidence={confidence:.3f}")
 
         results.append({
             "start": start_time,
