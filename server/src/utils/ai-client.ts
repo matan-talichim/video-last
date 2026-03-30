@@ -131,7 +131,7 @@ async function askGPT(
     const response = await client.chat.completions.create(
       {
         model: 'gpt-5.4',
-        max_tokens: maxTokens,
+        max_completion_tokens: maxTokens,
         messages,
       },
       { signal: controller.signal },
