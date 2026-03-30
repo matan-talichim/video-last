@@ -41,7 +41,8 @@
   },
   "analysis": {
     "timeout": 120000,
-    "maxFrames": 20
+    "maxFrames": 20,
+    "maxTokens": 8192
   },
   "transcription": {
     "model": "nova-3",
