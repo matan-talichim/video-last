@@ -95,7 +95,11 @@ export async function runEditAssembly(
   const paddingStart = editConfig?.paddingStart ?? 0.03;
   const paddingEnd = editConfig?.paddingEnd ?? 0.15;
 
-  logger.info('Edit assembly started', { jobDir, paddingStart, paddingEnd });
+  // Check for gated audio (noise-filtered)
+  const gatedAudioPath = resolve(jobDir, 'audio_gated.wav');
+  const useGatedAudio = existsSync(gatedAudioPath);
+
+  logger.info('Edit assembly started', { jobDir, paddingStart, paddingEnd, useGatedAudio });
 
   // Update status to editing
   const currentStatus = readStatus(statusPath);
@@ -218,20 +222,39 @@ export async function runEditAssembly(
       // Use original fps (fallback to 30)
       const fps = mediaInfo.fps > 0 ? Math.round(mediaInfo.fps) : 30;
 
-      const args = [
-        '-ss', String(actualStart),
-        '-i', originalPath,
-        '-to', String(actualEnd - actualStart),
-        '-c:v', 'libx264',
-        '-preset', DEFAULT_PRESET,
-        '-crf', String(DEFAULT_CRF),
-        '-r', String(fps),
-        '-af', audioFilter,
-        '-c:a', 'aac',
-        '-b:a', DEFAULT_AUDIO_BITRATE,
-        '-avoid_negative_ts', 'make_zero',
-        segmentFile,
-      ];
+      const args: string[] = useGatedAudio
+        ? [
+            '-ss', String(actualStart),
+            '-i', originalPath,
+            '-ss', String(actualStart),
+            '-i', gatedAudioPath,
+            '-to', String(actualEnd - actualStart),
+            '-map', '0:v',
+            '-map', '1:a',
+            '-c:v', 'libx264',
+            '-preset', DEFAULT_PRESET,
+            '-crf', String(DEFAULT_CRF),
+            '-r', String(fps),
+            '-af', audioFilter,
+            '-c:a', 'aac',
+            '-b:a', DEFAULT_AUDIO_BITRATE,
+            '-avoid_negative_ts', 'make_zero',
+            segmentFile,
+          ]
+        : [
+            '-ss', String(actualStart),
+            '-i', originalPath,
+            '-to', String(actualEnd - actualStart),
+            '-c:v', 'libx264',
+            '-preset', DEFAULT_PRESET,
+            '-crf', String(DEFAULT_CRF),
+            '-r', String(fps),
+            '-af', audioFilter,
+            '-c:a', 'aac',
+            '-b:a', DEFAULT_AUDIO_BITRATE,
+            '-avoid_negative_ts', 'make_zero',
+            segmentFile,
+          ];
 
       await runFFmpeg(args, ffmpegConfig, logger);
       segmentFiles.push(segmentFile);
