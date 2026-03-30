@@ -70,7 +70,7 @@
   },
   "audioScrub": {
     "enabled": true,
-    "thresholdDb": -26
+    "thresholdDb": -32
   },
   "ffmpeg": {
     "path": "ffmpeg",

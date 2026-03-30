@@ -131,12 +131,20 @@ async function runMerge(
 // ── Step 2: Semantic cleanup (AI) ───────────────
 
 function buildNumberedText(words: Word[]): string {
-  const presenterWords = words.filter((w) => w.is_presenter);
-  return presenterWords.map((w) => `[${w.id}] ${w.word}`).join(' ');
+  return words.map((w) =>
+    w.is_presenter ? `[${w.id}] ${w.word}` : `*[${w.id}] ${w.word}*`
+  ).join(' ');
 }
 
 const CLEANUP_PROMPT = `You are cleaning a Hebrew video transcript for a marketing video editor.
-You receive numbered words spoken by the presenter.
+You receive numbered words. Most are spoken by the presenter.
+Words marked with asterisks (*) were flagged as suspected non-presenter speech
+(background voice, crew, assistant). USE THIS AS A HINT:
+- If a starred word is clearly an interruption or production instruction — REMOVE it.
+- If a starred word completes the presenter's sentence and makes grammatical sense —
+  it may be a false positive. KEEP it.
+- When in doubt about starred words — KEEP.
+
 Your job: identify ONLY clear junk to remove. When in doubt — KEEP.
 
 RULES:
@@ -244,12 +252,13 @@ function buildSegments(
   for (const w of allWords) {
     if (removeIdSet.has(w.id)) {
       removedWords.push({ ...w, reason: removeReasonMap.get(w.id) ?? 'ai_removal' });
-    } else if (!w.is_presenter) {
-      removedWords.push({ ...w, reason: 'non_presenter' });
     } else {
       keptWords.push(w);
     }
   }
+
+  // Sort kept words chronologically to prevent start > end in segments
+  keptWords.sort((a, b) => a.start - b.start);
 
   // Build keep_segments: gap > 0.5s = new segment
   const keepSegments: KeepSegment[] = [];
@@ -340,9 +349,13 @@ export async function runMergeAndClean(
   // Step 3: Build keep/remove segments from word-level data
   const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, cleanResult.remove_ranges);
 
-  // Filter out micro-segments (< 0.8s) — no real sentence is that short
+  // Filter out invalid segments (start >= end) and micro-segments (< 0.8s)
   const MIN_KEEP_SEGMENT_DURATION = 0.8;
   const keepSegments = rawKeepSegments.filter((seg) => {
+    if (seg.start >= seg.end) {
+      logger.warn('Skipping invalid segment: start >= end', { start: seg.start, end: seg.end, duration: Math.round((seg.end - seg.start) * 1000) / 1000 });
+      return false;
+    }
     const duration = seg.end - seg.start;
     if (duration < MIN_KEEP_SEGMENT_DURATION) {
       logger.info('Removing micro-segment', { start: seg.start, end: seg.end, duration: Math.round(duration * 1000) / 1000 });
