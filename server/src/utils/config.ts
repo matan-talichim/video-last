@@ -30,12 +30,25 @@ export interface UploadConfig {
   maxFileSize: number;
 }
 
+export interface AIConfig {
+  defaultBrain: string;
+  timeout: number;
+  maxTokens: number;
+}
+
+export interface AnalysisConfig {
+  timeout: number;
+  maxFrames: number;
+}
+
 export interface AppConfig {
   editor: EditorConfig;
   server: { port: number };
   pipeline: { steps: StepConfigEntry[] };
   ffmpeg: FFmpegConfig;
   upload: UploadConfig;
+  ai: AIConfig;
+  analysis: AnalysisConfig;
 }
 
 export function loadConfig(configPath?: string): AppConfig {
