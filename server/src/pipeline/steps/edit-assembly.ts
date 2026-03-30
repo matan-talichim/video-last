@@ -6,17 +6,14 @@ import type { Logger } from '../../utils/logger.js';
 
 // ── Types ────────────────────────────────────────
 
-interface StructureSection {
-  type: string;
+interface TranscriptKeepSegment {
   start: number;
   end: number;
-  description: string;
+  [key: string]: unknown;
 }
 
-interface ApprovedPlan {
-  structure: {
-    sections: StructureSection[];
-  };
+interface CleanedTranscript {
+  keep_segments: TranscriptKeepSegment[];
   [key: string]: unknown;
 }
 
@@ -106,19 +103,19 @@ export async function runEditAssembly(
   });
 
   try {
-    // ── Step 1: Read approved plan & build keep segments ──
+    // ── Step 1: Read cleaned transcript & build keep segments ──
 
-    const approvedPlanPath = resolve(jobDir, 'approved_plan.json');
-    if (!existsSync(approvedPlanPath)) {
-      throw new Error('approved_plan.json not found — approve a plan before editing');
+    const transcriptPath = resolve(jobDir, 'cleaned_transcript.json');
+    if (!existsSync(transcriptPath)) {
+      throw new Error('cleaned_transcript.json not found — run transcript cleaning before editing');
     }
 
-    const approvedPlan = JSON.parse(
-      readFileSync(approvedPlanPath, 'utf-8'),
-    ) as ApprovedPlan;
+    const cleanedTranscript = JSON.parse(
+      readFileSync(transcriptPath, 'utf-8'),
+    ) as CleanedTranscript;
 
-    if (!approvedPlan.structure?.sections?.length) {
-      throw new Error('approved_plan has no structure.sections');
+    if (!cleanedTranscript.keep_segments?.length) {
+      throw new Error('cleaned_transcript has no keep_segments');
     }
 
     // Find original video file
@@ -145,12 +142,12 @@ export async function runEditAssembly(
       resolution: `${mediaInfo.width}x${mediaInfo.height}`,
     });
 
-    // Build keep segments from sections
-    const rawSegments: KeepSegment[] = approvedPlan.structure.sections.map((section, i) => ({
+    // Build keep segments from cleaned transcript
+    const rawSegments: KeepSegment[] = cleanedTranscript.keep_segments.map((seg, i) => ({
       index: i,
-      start: section.start,
-      end: section.end,
-      type: section.type,
+      start: seg.start,
+      end: seg.end,
+      type: String(seg.type ?? 'keep'),
     }));
 
     // Sort chronologically and merge overlaps
@@ -176,7 +173,7 @@ export async function runEditAssembly(
     }
 
     logger.info('Keep segments built', {
-      total: approvedPlan.structure.sections.length,
+      total: cleanedTranscript.keep_segments.length,
       afterMerge: keepSegments.length,
       afterFilter: validSegments.length,
     });
@@ -277,7 +274,7 @@ export async function runEditAssembly(
       originalDuration: Math.round(videoDuration * 100) / 100,
       editedDuration: Math.round(editedDuration * 100) / 100,
       segmentsKept: validSegments.length,
-      segmentsRemoved: approvedPlan.structure.sections.length - validSegments.length,
+      segmentsRemoved: cleanedTranscript.keep_segments.length - validSegments.length,
       compressionRatio,
     };
 
