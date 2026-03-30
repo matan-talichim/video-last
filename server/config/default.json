@@ -52,7 +52,6 @@
     "punctuate": true,
     "words": true,
     "paragraphs": true,
-    "diarize": true
   },
   "presenterDetection": {
     "lipThreshold": 0.25,
