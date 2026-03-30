@@ -27,10 +27,19 @@ export function getAnalyzerPrompt(settings: {
 
 ## חוקי ניתוח
 
-### 1. זיהוי Hook
+### 1. זיהוי Hook — 2 אפשרויות
+חפש תמיד **2 אפשרויות hook** שונות:
+
+**hookOption1 — ה-hook הטבעי (הפתיחה הקיימת):**
 - חפש Hook ב-0.0-6.0 שניות הראשונות.
 - HookScore (0-100) = 25*HasNumber + 20*HasPainOrRisk + 15*HasContradiction + 15*HasCuriosityGap + 10*HasTimeBound + 10*HasSpecificOutcome + 5*HasSecondPerson
-- סוגי Hooks לזיהוי:
+
+**hookOption2 — hook חלופי (repositioning):**
+- חפש את המשפט החזק ביותר בסרטון שאפשר להעביר להתחלה
+- ודא שהמשפט עצמאי תחבירית (לא מכיל "הזה", "לכן", "כך", "ולכן")
+- אם אין משפט חלופי טוב (הפתיחה הקיימת היא הטובה ביותר) — עדיין החזר אפשרות שנייה, אבל סמן isWeaker: true
+
+סוגי Hooks לזיהוי:
   - כמותי סדור: "3 טעויות ש...", "5 הרגלים של..."
   - שבירת פרדיגמה: "כולם אומרים X, אבל בפועל..."
   - פער סקרנות: "הסוד שאף אחד לא מספר..."
@@ -52,12 +61,6 @@ export function getAnalyzerPrompt(settings: {
 - "אני רוצה לשתף אתכם במשהו"
 - "ברוכים הבאים לערוץ שלי"
 - "אוקיי, אז בואו נתחיל"
-
-### 3. Hook Repositioning
-אם מצאת משפט באמצע הסרטון עם HookScore גבוה ב-20+ נקודות מהפתיח:
-- ודא שהמשפט עצמאי תחבירית (לא מכיל "הזה", "לכן", "כך", "ולכן")
-- אם כן — המלץ להעביר אותו להתחלה כ-Cold Open
-- הוסף הערה: "הומלץ להעביר את המשפט מ-XX:XX להתחלה"
 
 ### 4. זיהוי מבנה הסרטון
 פרק את התמלול לחלקים:
@@ -227,18 +230,25 @@ export function getAnalyzerPrompt(settings: {
   "viralityScore": 72,
   "retentionRisk": "low | medium | high",
 
-  "hook": {
-    "currentHookScore": 45,
-    "currentHookText": "המשפט הנוכחי שפותח את הסרטון",
-    "currentHookStart": 0.0,
-    "currentHookEnd": 3.5,
-    "isWeakStart": true,
-    "recommendedHookText": "המשפט המומלץ כ-hook",
-    "recommendedHookStart": 25.3,
-    "recommendedHookEnd": 28.1,
-    "recommendedHookScore": 85,
-    "repositionReason": "המשפט בשנייה 25 חזק יותר כי מכיל מספר וניגוד"
-  },
+  "isWeakStart": true,
+  "hookOptions": [
+    {
+      "text": "המשפט הנוכחי שפותח את הסרטון",
+      "start": 0.0,
+      "end": 3.5,
+      "score": 45,
+      "explanation": "הסבר למה זה hook טוב או לא",
+      "isWeaker": false
+    },
+    {
+      "text": "משפט חזק מאמצע הסרטון",
+      "start": 25.3,
+      "end": 28.1,
+      "score": 85,
+      "explanation": "המשפט מכיל מספר וניגוד — חזק כפתיח",
+      "isWeaker": false
+    }
+  ],
 
   "structure": {
     "recommended": "hook_setup_content_cta",
@@ -257,16 +267,6 @@ export function getAnalyzerPrompt(settings: {
       "end": 35.2,
       "reason": "claim חזק עם מספר ופרק זמן",
       "suggestedAction": "zoom_in"
-    }
-  ],
-
-  "weakPoints": [
-    {
-      "text": "אז בעצם משהו כזה...",
-      "start": 18.0,
-      "end": 20.5,
-      "reason": "שפה מעורפלת, חוסר ביטחון",
-      "suggestedAction": "cut_or_tighten"
     }
   ],
 

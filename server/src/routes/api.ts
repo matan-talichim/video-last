@@ -411,9 +411,13 @@ export function createApiRouter(config: AppConfig): Router {
         return;
       }
 
-      const plan = req.body;
+      const plan = req.body as Record<string, unknown>;
+      const selectedHook = typeof plan.selectedHook === 'number' ? plan.selectedHook : 0;
+      const approvedPlan = { ...plan, selectedHook };
       const approvedPath = resolve(jobDir, 'approved_plan.json');
-      writeFileSync(approvedPath, JSON.stringify(plan, null, 2), 'utf-8');
+      writeFileSync(approvedPath, JSON.stringify(approvedPlan, null, 2), 'utf-8');
+
+      logger.info('Selected hook saved', { jobId, selectedHook });
 
       // Update status
       const statusPath = resolve(jobDir, 'status.json');

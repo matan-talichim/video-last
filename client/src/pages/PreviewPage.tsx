@@ -4,17 +4,13 @@ import { useParams, useNavigate } from 'react-router-dom';
 
 // ── Types ────────────────────────────────────────
 
-interface HookData {
-  currentHookScore: number;
-  currentHookText: string;
-  currentHookStart: number;
-  currentHookEnd: number;
-  isWeakStart: boolean;
-  recommendedHookText: string;
-  recommendedHookStart: number;
-  recommendedHookEnd: number;
-  recommendedHookScore: number;
-  repositionReason: string;
+interface HookOption {
+  text: string;
+  start: number;
+  end: number;
+  score: number;
+  explanation: string;
+  isWeaker?: boolean;
 }
 
 interface StructureSection {
@@ -25,14 +21,6 @@ interface StructureSection {
 }
 
 interface StrongPoint {
-  text: string;
-  start: number;
-  end: number;
-  reason: string;
-  suggestedAction: string;
-}
-
-interface WeakPoint {
   text: string;
   start: number;
   end: number;
@@ -77,13 +65,13 @@ interface AnalysisData {
   targetAudience: string;
   viralityScore: number;
   retentionRisk: string;
-  hook: HookData;
+  isWeakStart: boolean;
+  hookOptions: HookOption[];
   structure: {
     recommended: string;
     sections: StructureSection[];
   };
   strongPoints: StrongPoint[];
-  weakPoints: WeakPoint[];
   brollSuggestions: BrollSuggestion[];
   editingPlan: EditingPlan;
 }
@@ -131,6 +119,7 @@ function PreviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  const [selectedHook, setSelectedHook] = useState(0);
   const [brollChecked, setBrollChecked] = useState<boolean[]>([]);
   const [revisionNotes, setRevisionNotes] = useState('');
   const [revising, setRevising] = useState(false);
@@ -164,6 +153,7 @@ function PreviewPage() {
     try {
       const approvedPlan = {
         ...analysis,
+        selectedHook: selectedHook as 0 | 1,
         brollSuggestions: analysis.brollSuggestions?.filter((_, i) => brollChecked[i]) ?? [],
       };
 
@@ -264,73 +254,59 @@ function PreviewPage() {
         </div>
       </Card>
 
-      {/* Section 2 — Hook */}
+      {/* Section 2 — Hook Options */}
       <Card title={t('preview.hook')}>
-        {(() => {
-          const hook = analysis.hook;
-          const isSameHook =
-            hook.recommendedHookText &&
-            (hook.currentHookText === hook.recommendedHookText ||
-              (hook.currentHookStart === hook.recommendedHookStart &&
-                hook.currentHookEnd === hook.recommendedHookEnd));
-
-          return (
-            <div className="flex flex-col gap-3">
-              {isSameHook ? (
-                <>
-                  <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-3">
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="text-sm font-semibold text-gray-400">{t('preview.hook')}</span>
-                      <ScoreBadge score={hook.currentHookScore} />
-                    </div>
-                    <p className="text-gray-300">"{hook.currentHookText}"</p>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {formatTime(hook.currentHookStart)} - {formatTime(hook.currentHookEnd)}
-                    </p>
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {analysis.hookOptions.map((option, i) => {
+              const isSelected = selectedHook === i;
+              return (
+                <div
+                  key={i}
+                  className={`rounded-lg border p-3 transition-colors ${
+                    isSelected
+                      ? 'border-blue-500 bg-blue-900/20'
+                      : 'border-gray-700 bg-gray-800/50'
+                  }`}
+                >
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-gray-400">
+                      {t('preview.hookOption')} {i + 1}
+                    </span>
+                    <ScoreBadge score={option.score} />
                   </div>
-                  <p className="text-center text-sm text-green-400">
-                    {t('preview.hookStrongEnough')}
+                  <p className="text-gray-200">"{option.text}"</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {formatTime(option.start)} - {formatTime(option.end)}
                   </p>
-                </>
-              ) : (
-                <>
-                  <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-3">
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="text-sm font-semibold text-gray-400">{t('preview.currentHook')}</span>
-                      <ScoreBadge score={hook.currentHookScore} />
-                    </div>
-                    <p className="text-gray-300">"{hook.currentHookText}"</p>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {formatTime(hook.currentHookStart)} - {formatTime(hook.currentHookEnd)}
-                    </p>
-                  </div>
-
-                  {hook.recommendedHookText && (
-                    <div className="rounded-lg border border-blue-800 bg-blue-900/20 p-3">
-                      <div className="mb-1 flex items-center justify-between">
-                        <span className="text-sm font-semibold text-blue-400">{t('preview.recommendedHook')}</span>
-                        <ScoreBadge score={hook.recommendedHookScore} />
-                      </div>
-                      <p className="text-gray-200">"{hook.recommendedHookText}"</p>
-                      <p className="mt-1 text-xs text-gray-500">
-                        {formatTime(hook.recommendedHookStart)} - {formatTime(hook.recommendedHookEnd)}
-                      </p>
-                      {hook.repositionReason && (
-                        <p className="mt-2 text-sm text-blue-300">{hook.repositionReason}</p>
-                      )}
-                    </div>
+                  <p className="mt-2 text-sm text-gray-400">
+                    <span className="font-semibold text-gray-300">{t('preview.hookExplanation')}:</span>{' '}
+                    {option.explanation}
+                  </p>
+                  {option.isWeaker && (
+                    <p className="mt-1 text-xs text-yellow-400">{t('preview.hookWeaker')}</p>
                   )}
-                </>
-              )}
-
-              {analysis.hook.isWeakStart && (
-                <div className="rounded-lg border border-yellow-700 bg-yellow-900/20 p-2 text-center text-sm text-yellow-300">
-                  {t('preview.weakStartWarning')}
+                  <button
+                    onClick={() => setSelectedHook(i)}
+                    className={`mt-3 w-full rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      isSelected
+                        ? 'bg-blue-600 text-white'
+                        : 'border border-gray-600 bg-gray-700 text-gray-300 hover:border-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {isSelected ? t('preview.selectedHook') : t('preview.selectHook')}
+                  </button>
                 </div>
-              )}
+              );
+            })}
+          </div>
+
+          {analysis.isWeakStart && (
+            <div className="rounded-lg border border-yellow-700 bg-yellow-900/20 p-2 text-center text-sm text-yellow-300">
+              {t('preview.weakStartWarning')}
             </div>
-          );
-        })()}
+          )}
+        </div>
       </Card>
 
       {/* Section 3 — Structure */}
@@ -375,29 +351,7 @@ function PreviewPage() {
         </Card>
       )}
 
-      {/* Section 5 — Weak Points */}
-      {analysis.weakPoints.length > 0 && (
-        <Card title={t('preview.weakPoints')}>
-          <div className="flex flex-col gap-2">
-            {analysis.weakPoints.map((point, i) => (
-              <div key={i} className="rounded-lg border border-red-800/50 bg-red-900/10 p-3">
-                <p className="text-gray-200">"{point.text}"</p>
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-sm text-red-400">{point.reason}</span>
-                  <span className="text-xs text-gray-500">
-                    {formatTime(point.start)} - {formatTime(point.end)}
-                  </span>
-                </div>
-                <span className="mt-1 inline-block rounded bg-red-800/30 px-2 py-0.5 text-xs text-red-300">
-                  {t(`preview.suggestedAction.${point.suggestedAction}`, { defaultValue: point.suggestedAction })}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {/* Section 6 — B-Roll Suggestions */}
+      {/* Section 5 — B-Roll Suggestions */}
       {analysis.brollSuggestions.length > 0 && (
         <Card title={t('preview.suggestedBroll')}>
           <div className="flex flex-col gap-2">

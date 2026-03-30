@@ -38,10 +38,10 @@ interface AnalysisResult {
   targetAudience: string;
   viralityScore: number;
   retentionRisk: string;
-  hook: Record<string, unknown>;
+  isWeakStart: boolean;
+  hookOptions: Array<Record<string, unknown>>;
   structure: Record<string, unknown>;
   strongPoints: Array<Record<string, unknown>>;
-  weakPoints: Array<Record<string, unknown>>;
   brollSuggestions: Array<Record<string, unknown>>;
   editingPlan: Record<string, unknown>;
 }
@@ -345,7 +345,7 @@ ${presenterSegments.segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(
     viralityScore: data.viralityScore,
     retentionRisk: data.retentionRisk,
     strongPoints: data.strongPoints?.length ?? 0,
-    weakPoints: data.weakPoints?.length ?? 0,
+    hookOptions: data.hookOptions?.length ?? 0,
     brollSuggestions: data.brollSuggestions?.length ?? 0,
     brain,
     inputTokens: usage.inputTokens,
@@ -377,7 +377,7 @@ ${presenterSegments.segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(
       retentionRisk: data.retentionRisk,
       detectedGenre: data.detectedGenre,
       strongPointsCount: data.strongPoints?.length ?? 0,
-      weakPointsCount: data.weakPoints?.length ?? 0,
+      hookOptionsCount: data.hookOptions?.length ?? 0,
       brollSuggestionsCount: data.brollSuggestions?.length ?? 0,
       brain,
       outputPath,
