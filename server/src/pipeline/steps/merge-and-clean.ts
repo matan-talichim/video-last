@@ -258,7 +258,7 @@ function buildSegments(
       const prev = segWords[segWords.length - 1]!;
       const curr = keptWords[i]!;
 
-      if (curr.start - prev.end > 0.4) {
+      if (curr.start - prev.end > 0.25) {
         // Close current segment
         keepSegments.push({
           start: segWords[0]!.start,
@@ -336,7 +336,18 @@ export async function runMergeAndClean(
   const { cleanResult, usage } = await runSemanticCleanup(jobDir, merged, brain, logger);
 
   // Step 3: Build keep/remove segments from word-level data
-  const { keepSegments, removeSegments } = buildSegments(merged.words, cleanResult.remove_ranges);
+  const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, cleanResult.remove_ranges);
+
+  // Filter out micro-segments (< 0.8s) — no real sentence is that short
+  const MIN_KEEP_SEGMENT_DURATION = 0.8;
+  const keepSegments = rawKeepSegments.filter((seg) => {
+    const duration = seg.end - seg.start;
+    if (duration < MIN_KEEP_SEGMENT_DURATION) {
+      logger.info('Removing micro-segment', { start: seg.start, end: seg.end, duration: Math.round(duration * 1000) / 1000 });
+      return false;
+    }
+    return true;
+  });
 
   const processingTimeMs = Date.now() - startTime;
 
