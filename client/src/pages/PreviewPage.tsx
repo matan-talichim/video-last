@@ -258,7 +258,7 @@ function PreviewPage() {
             <ScoreBadge score={analysis.viralityScore} />
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-400">{t('preview.retentionRisk')}:</span>
+            <span className="text-sm text-gray-400">{t('preview.dropOffRisk')}:</span>
             <RiskBadge risk={analysis.retentionRisk} t={t} />
           </div>
         </div>
@@ -266,44 +266,75 @@ function PreviewPage() {
 
       {/* Section 2 — Hook */}
       <Card title={t('preview.hook')}>
-        <div className="flex flex-col gap-3">
-          <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-3">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-sm font-semibold text-gray-400">{t('preview.currentHook')}</span>
-              <ScoreBadge score={analysis.hook.currentHookScore} />
-            </div>
-            <p className="text-gray-300">"{analysis.hook.currentHookText}"</p>
-            <p className="mt-1 text-xs text-gray-500">
-              {formatTime(analysis.hook.currentHookStart)} - {formatTime(analysis.hook.currentHookEnd)}
-            </p>
-          </div>
+        {(() => {
+          const hook = analysis.hook;
+          const isSameHook =
+            hook.recommendedHookText &&
+            (hook.currentHookText === hook.recommendedHookText ||
+              (hook.currentHookStart === hook.recommendedHookStart &&
+                hook.currentHookEnd === hook.recommendedHookEnd));
 
-          {analysis.hook.recommendedHookText && (
-            <div className="rounded-lg border border-blue-800 bg-blue-900/20 p-3">
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-sm font-semibold text-blue-400">{t('preview.recommendedHook')}</span>
-                <ScoreBadge score={analysis.hook.recommendedHookScore} />
-              </div>
-              <p className="text-gray-200">"{analysis.hook.recommendedHookText}"</p>
-              <p className="mt-1 text-xs text-gray-500">
-                {formatTime(analysis.hook.recommendedHookStart)} - {formatTime(analysis.hook.recommendedHookEnd)}
-              </p>
-              {analysis.hook.repositionReason && (
-                <p className="mt-2 text-sm text-blue-300">{analysis.hook.repositionReason}</p>
+          return (
+            <div className="flex flex-col gap-3">
+              {isSameHook ? (
+                <>
+                  <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-3">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-gray-400">{t('preview.hook')}</span>
+                      <ScoreBadge score={hook.currentHookScore} />
+                    </div>
+                    <p className="text-gray-300">"{hook.currentHookText}"</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {formatTime(hook.currentHookStart)} - {formatTime(hook.currentHookEnd)}
+                    </p>
+                  </div>
+                  <p className="text-center text-sm text-green-400">
+                    {t('preview.hookStrongEnough')}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-3">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-gray-400">{t('preview.currentHook')}</span>
+                      <ScoreBadge score={hook.currentHookScore} />
+                    </div>
+                    <p className="text-gray-300">"{hook.currentHookText}"</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {formatTime(hook.currentHookStart)} - {formatTime(hook.currentHookEnd)}
+                    </p>
+                  </div>
+
+                  {hook.recommendedHookText && (
+                    <div className="rounded-lg border border-blue-800 bg-blue-900/20 p-3">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-sm font-semibold text-blue-400">{t('preview.recommendedHook')}</span>
+                        <ScoreBadge score={hook.recommendedHookScore} />
+                      </div>
+                      <p className="text-gray-200">"{hook.recommendedHookText}"</p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {formatTime(hook.recommendedHookStart)} - {formatTime(hook.recommendedHookEnd)}
+                      </p>
+                      {hook.repositionReason && (
+                        <p className="mt-2 text-sm text-blue-300">{hook.repositionReason}</p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {analysis.hook.isWeakStart && (
+                <div className="rounded-lg border border-yellow-700 bg-yellow-900/20 p-2 text-center text-sm text-yellow-300">
+                  {t('preview.weakStartWarning')}
+                </div>
               )}
             </div>
-          )}
-
-          {analysis.hook.isWeakStart && (
-            <div className="rounded-lg border border-yellow-700 bg-yellow-900/20 p-2 text-center text-sm text-yellow-300">
-              {t('preview.weakStartWarning')}
-            </div>
-          )}
-        </div>
+          );
+        })()}
       </Card>
 
       {/* Section 3 — Structure */}
-      <Card title={t('preview.structure')}>
+      <Card title={t('preview.suggestedStructure')}>
         <div className="flex flex-col gap-2">
           {analysis.structure.sections.map((section, i) => (
             <div
@@ -368,7 +399,7 @@ function PreviewPage() {
 
       {/* Section 6 — B-Roll Suggestions */}
       {analysis.brollSuggestions.length > 0 && (
-        <Card title={t('preview.brollSuggestions')}>
+        <Card title={t('preview.suggestedBroll')}>
           <div className="flex flex-col gap-2">
             {analysis.brollSuggestions.map((broll, i) => (
               <div
@@ -398,7 +429,7 @@ function PreviewPage() {
       )}
 
       {/* Section 7 — Editing Plan */}
-      <Card title={t('preview.editingPlan')}>
+      <Card title={t('preview.editingPlanSection')}>
         <div className="flex flex-col gap-3">
           <InfoRow
             label={t('preview.estimatedDuration')}
@@ -426,7 +457,7 @@ function PreviewPage() {
 
           {analysis.editingPlan.cta && (
             <div className="rounded-lg border border-purple-800/50 bg-purple-900/10 p-3">
-              <span className="text-sm font-semibold text-purple-400">CTA</span>
+              <span className="text-sm font-semibold text-purple-400">{t('preview.cta')}</span>
               <p className="text-gray-200">"{analysis.editingPlan.cta.text}"</p>
               <p className="text-xs text-gray-500">
                 {formatTime(analysis.editingPlan.cta.start)} - {formatTime(analysis.editingPlan.cta.end)} | {analysis.editingPlan.cta.type}
@@ -437,7 +468,7 @@ function PreviewPage() {
       </Card>
 
       {/* Section 8 — Revision Notes */}
-      <Card title={t('preview.revisionNotes')}>
+      <Card title={t('preview.haveFeedback')}>
         <textarea
           value={revisionNotes}
           onChange={(e) => setRevisionNotes(e.target.value)}

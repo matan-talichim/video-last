@@ -226,13 +226,14 @@ export function createApiRouter(config: AppConfig): Router {
 
       const inputFile = resolve(jobDir, files[0]!);
 
-      // Guard: reject if already processing
+      // Guard: reject if already processing or further along in the pipeline
       const statusPath = resolve(jobDir, 'status.json');
       if (existsSync(statusPath)) {
         const current = JSON.parse(readFileSync(statusPath, 'utf-8')) as { status: string };
-        if (current.status === 'processing') {
-          logger.warn('Process — already running', { jobId });
-          res.status(409).json({ error: 'Job is already processing' });
+        const blockedStatuses = ['processing', 'analyzed', 'editing', 'edited'];
+        if (blockedStatuses.includes(current.status)) {
+          logger.warn('Process — blocked, current status prevents re-run', { jobId, currentStatus: current.status });
+          res.status(409).json({ error: `Job is already in status: ${current.status}` });
           return;
         }
       }
