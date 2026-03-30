@@ -51,7 +51,7 @@
     "utterances": true,
     "punctuate": true,
     "words": true,
-    "paragraphs": true,
+    "paragraphs": true
   },
   "presenterDetection": {
     "lipThreshold": 0.25,
@@ -60,7 +60,8 @@
     "pythonPath": "python3"
   },
   "editAssembly": {
-    "padding": 0.02,
+    "paddingStart": 0.03,
+    "paddingEnd": 0.15,
     "fadeDuration": 0.03,
     "crf": 18,
     "preset": "medium",

@@ -91,10 +91,11 @@ export async function runEditAssembly(
   // Read padding from config
   const config = loadConfig();
   const editConfig = (config as unknown as Record<string, unknown>).editAssembly as
-    { padding?: number } | undefined;
-  const padding = editConfig?.padding ?? 0.02;
+    { paddingStart?: number; paddingEnd?: number } | undefined;
+  const paddingStart = editConfig?.paddingStart ?? 0.03;
+  const paddingEnd = editConfig?.paddingEnd ?? 0.15;
 
-  logger.info('Edit assembly started', { jobDir, padding });
+  logger.info('Edit assembly started', { jobDir, paddingStart, paddingEnd });
 
   // Update status to editing
   const currentStatus = readStatus(statusPath);
@@ -195,9 +196,9 @@ export async function runEditAssembly(
     for (let i = 0; i < validSegments.length; i++) {
       const seg = validSegments[i]!;
 
-      // Apply padding
-      const actualStart = Math.max(0, seg.start - padding);
-      const actualEnd = Math.min(videoDuration, seg.end + padding);
+      // Apply asymmetric padding
+      const actualStart = Math.max(0, seg.start - paddingStart);
+      const actualEnd = Math.min(videoDuration, seg.end + paddingEnd);
       const segDuration = actualEnd - actualStart;
 
       const segmentFile = join(tempDir, `segment_${timestamp}_${String(i).padStart(3, '0')}.mp4`);
