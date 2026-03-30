@@ -237,7 +237,7 @@ function buildSegments(
       const prev = segWords[segWords.length - 1]!;
       const curr = keptWords[i]!;
 
-      if (curr.start - prev.end > 0.5) {
+      if (curr.start - prev.end > 0.4) {
         // Close current segment
         keepSegments.push({
           start: segWords[0]!.start,

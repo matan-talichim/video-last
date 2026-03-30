@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import type { FFmpegConfig } from '../../utils/config.js';
+import { loadConfig } from '../../utils/config.js';
 import { runFFmpeg, getMediaInfo } from '../../utils/ffmpeg.js';
 import type { Logger } from '../../utils/logger.js';
 
@@ -35,7 +36,6 @@ interface EditResult {
 
 // ── Config defaults ──────────────────────────────
 
-const DEFAULT_PADDING = 0.05;       // 50ms
 const DEFAULT_FADE_DURATION = 0.03; // 30ms
 const DEFAULT_CRF = 18;
 const DEFAULT_PRESET = 'medium';
@@ -88,7 +88,13 @@ export async function runEditAssembly(
   const tempDir = resolve(jobDir, 'temp');
   const timestamp = Date.now();
 
-  logger.info('Edit assembly started', { jobDir });
+  // Read padding from config
+  const config = loadConfig();
+  const editConfig = (config as unknown as Record<string, unknown>).editAssembly as
+    { padding?: number } | undefined;
+  const padding = editConfig?.padding ?? 0.02;
+
+  logger.info('Edit assembly started', { jobDir, padding });
 
   // Update status to editing
   const currentStatus = readStatus(statusPath);
@@ -190,8 +196,8 @@ export async function runEditAssembly(
       const seg = validSegments[i]!;
 
       // Apply padding
-      const actualStart = Math.max(0, seg.start - DEFAULT_PADDING);
-      const actualEnd = Math.min(videoDuration, seg.end + DEFAULT_PADDING);
+      const actualStart = Math.max(0, seg.start - padding);
+      const actualEnd = Math.min(videoDuration, seg.end + padding);
       const segDuration = actualEnd - actualStart;
 
       const segmentFile = join(tempDir, `segment_${timestamp}_${String(i).padStart(3, '0')}.mp4`);
