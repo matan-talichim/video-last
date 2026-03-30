@@ -133,57 +133,47 @@ function buildNumberedText(words: Word[]): string {
   return presenterWords.map((w) => `[${w.id}] ${w.word}`).join(' ');
 }
 
-const CLEANUP_PROMPT = `קיבלת תמלול של חומרי גלם מסרטון פרזנטור. הטקסט ממוספר — כל מילה מזוהה ב-ID ייחודי.
+const CLEANUP_PROMPT = `You are cleaning a Hebrew video transcript for a marketing video editor.
+You receive numbered words spoken by the presenter.
+Your job: identify ONLY clear junk to remove. When in doubt — KEEP.
 
-עליך לזהות ולסמן להסרה:
+RULES:
 
-1. טייקים חוזרים — הפרזנטור אמר משפט ואז חזר עליו. השאר רק את הטייק האחרון (בדרך כלל הטוב יותר). סמן את הטייק הקודם להסרה.
-2. הוראות הפקה — ביטויים כמו "נתחיל שוב", "מוכן?", "עוד פעם", "רגע רגע", "מההתחלה", "שנייה", "go", "תתחיל", "מצלמה רצה", "יאללה" — סמן להסרה.
-3. מילות פתיחה מיותרות — "אוקיי אז", "טוב אז", "יאללה אז" בתחילת משפטים — סמן להסרה.
+1. DUPLICATE TAKES (CLEAR RETAKES ONLY):
+   A duplicate take is when the presenter STOPS mid-sentence, pauses, and
+   RESTARTS the same sentence from the beginning.
+   - Only mark as duplicate if the sentence clearly restarts (same opening 2-3 words).
+   - Keep the LAST (final) take — remove earlier abandoned attempts.
+   - Do NOT remove content that covers different aspects of the same topic.
+   - Do NOT remove a sentence just because it has similar words to another.
 
-PRODUCTION INSTRUCTION DETECTION — CRITICAL RULES:
-
-1. Hunt down Meta-Speech: You must actively identify and completely remove any words that are instructions to the camera, crew, or self-corrections. These are NOT part of the final video.
-
-2. Hebrew production cues dictionary (remove ALL occurrences):
-   "ממשיכים", "שוב", "טייק", "טייק חדש", "אוקיי", "רגע", "רגע רגע",
-   "מוכן", "מוכנים", "נתחיל", "נתחיל שוב", "עוד פעם", "מהתחלה",
-   "שוב מנקודה זו", "עוצר", "פסול", "סליחה", "אחת שתיים", "שקט מצלמים",
+2. PRODUCTION INSTRUCTIONS:
+   Remove words that are clearly crew/director instructions, not part of the script.
+   Dictionary: "ממשיכים", "שוב", "טייק", "נתחיל", "עוד פעם", "מהתחלה",
+   "שוב מנקודה זו", "עוצר", "פסול", "סליחה", "שקט מצלמים",
    "לא טוב", "אני עושה שוב", "בואו נעשה עוד אחד"
 
-3. Even if these words are spoken by the presenter, if they do not logically belong to a polished marketing script, you MUST return their IDs with reason: "production_instruction"
+3. LINE FEEDING:
+   If the producer whispers 2-4 words and then the presenter repeats
+   those exact words immediately after — remove the producer's whisper (first occurrence).
 
-4. Context rule: If a word from the dictionary appears BETWEEN two similar sentences (indicating a retake), it is definitely a production instruction. Remove it along with 2-3 words before and after it (the "tail" of the abandoned take).
+4. GOLDEN RULE — WHEN IN DOUBT, KEEP:
+   - Better to include a slightly imperfect moment than to cut important content.
+   - If a sentence adds new information or a new angle — it is NOT a duplicate.
+   - If you're not 100% sure it's junk — KEEP IT.
+   - Your goal: clean transcript, not short transcript.
 
-5. Standalone filler between takes: Words like "אוקיי", "טוב", "יאללה" that appear after a pause and before a new sentence — always remove.
-
-6. SHADOW DICTATION & BROKEN CONTEXT:
-   - If a short phrase (2-4 words) appears, is followed by a pause, and then
-     the SAME or SIMILAR phrase is repeated fluently — the first instance is
-     the producer dictating. REMOVE the first instance.
-   - If a sentence fragment interrupts the logical flow of the marketing message,
-     it is a shadow dictation. REMOVE IT.
-   - Rule: If keeping the words breaks the grammatical or logical flow of a
-     polished marketing video — REMOVE under "duplicate_take" or "production_instruction".
-
-7. LINE FEEDING (PROMPTER PATTERN):
-   The producer often whispers the next 2-4 words to remind the presenter what to say.
-   Pattern: [Presenter stops] → [Producer whispers 2-4 words] → [Presenter repeats same words]
-   ALWAYS remove the first occurrence (the producer's whisper).
-   Even if it's only 2 words — if they appear twice in sequence, remove the first.
-
-החזר JSON בפורמט הבא בלבד:
+Return JSON with remove_ranges only for items you are 100% certain are junk.
 {
   "remove_ranges": [
     { "ids": [48, 49, 50], "reason": "duplicate_take" },
-    { "ids": [72, 73, 74, 75], "reason": "production_instruction" },
-    { "ids": [100, 101, 102], "reason": "filler_opening" }
+    { "ids": [72, 73, 74, 75], "reason": "production_instruction" }
   ]
 }
 
-אם אין מה להסיר, החזר: { "remove_ranges": [] }
+If nothing to remove, return: { "remove_ranges": [] }
 
-טקסט ממוספר:
+Numbered text:
 `;
 
 async function runSemanticCleanup(
