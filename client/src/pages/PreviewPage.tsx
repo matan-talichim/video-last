@@ -174,8 +174,7 @@ function PreviewPage() {
       });
 
       if (res.ok) {
-        // Navigate to next step (placeholder for now)
-        navigate(`/analysis/${jobId}`);
+        navigate(`/result/${jobId}`);
       }
     } catch {
       // Silently fail

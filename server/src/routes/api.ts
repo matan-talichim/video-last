@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync, statSync, createReadStream } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { rename } from 'node:fs/promises';
 import type { AppConfig } from '../utils/config.js';
@@ -13,6 +13,7 @@ import { runPresenterDetection } from '../pipeline/steps/presenter-detection.js'
 import { runTranscription } from '../pipeline/steps/transcription.js';
 import { runMergeAndClean } from '../pipeline/steps/merge-and-clean.js';
 import { runAnalyze } from '../pipeline/steps/analyze.js';
+import { runEditAssembly } from '../pipeline/steps/edit-assembly.js';
 import { askAIJSON } from '../utils/ai-client.js';
 import type { AIBrain } from '../utils/ai-client.js';
 
@@ -352,6 +353,7 @@ export function createApiRouter(config: AppConfig): Router {
             transcription: { status: 'pending' },
             mergeAndClean: { status: 'pending' },
             analysis: { status: 'pending' },
+            editAssembly: { status: 'pending' },
           },
         });
         return;
@@ -416,15 +418,26 @@ export function createApiRouter(config: AppConfig): Router {
       const statusPath = resolve(jobDir, 'status.json');
       if (existsSync(statusPath)) {
         const currentStatus = JSON.parse(readFileSync(statusPath, 'utf-8')) as Record<string, unknown>;
+        const currentProgress = (currentStatus.progress ?? {}) as Record<string, unknown>;
         writeFileSync(statusPath, JSON.stringify({
           ...currentStatus,
-          status: 'plan_approved',
+          status: 'editing',
+          progress: {
+            ...currentProgress,
+            editAssembly: { status: 'processing' },
+          },
         }, null, 2), 'utf-8');
       }
 
-      logger.info('Plan approved', { jobId });
+      logger.info('Plan approved, starting edit assembly', { jobId });
 
-      res.json({ status: 'plan_approved' });
+      // Auto-trigger edit assembly in the background
+      runEditAssembly(jobDir, config.ffmpeg, logger).catch((err) => {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error('Edit assembly failed after approve', { jobId, error: errorMsg });
+      });
+
+      res.json({ status: 'editing' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('Plan approval failed', { error: message });
@@ -520,10 +533,154 @@ ${notes}
   });
 
   // ──────────────────────────────────────────
-  // POST /api/edit (placeholder)
+  // POST /api/jobs/:jobId/edit
   // ──────────────────────────────────────────
-  router.post('/edit', (_req, res) => {
-    res.json({ message: 'not implemented yet' });
+  router.post('/jobs/:jobId/edit', (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
+
+      if (!existsSync(jobDir)) {
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const approvedPlanPath = resolve(jobDir, 'approved_plan.json');
+      if (!existsSync(approvedPlanPath)) {
+        res.status(400).json({ error: 'יש לאשר תוכנית עריכה לפני ביצוע' });
+        return;
+      }
+
+      // Guard: reject if already editing
+      const statusPath = resolve(jobDir, 'status.json');
+      if (existsSync(statusPath)) {
+        const current = JSON.parse(readFileSync(statusPath, 'utf-8')) as { status: string };
+        if (current.status === 'editing') {
+          res.status(409).json({ error: 'Edit already in progress' });
+          return;
+        }
+      }
+
+      logger.info('Edit triggered manually', { jobId });
+
+      runEditAssembly(jobDir, config.ffmpeg, logger).catch((err) => {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error('Edit assembly failed', { jobId, error: errorMsg });
+      });
+
+      res.json({ status: 'editing' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Edit endpoint failed', { error: message });
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // ──────────────────────────────────────────
+  // GET /api/jobs/:jobId/result
+  // ──────────────────────────────────────────
+  router.get('/jobs/:jobId/result', (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
+
+      if (!existsSync(jobDir)) {
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const statusPath = resolve(jobDir, 'status.json');
+      if (!existsSync(statusPath)) {
+        res.json({ status: 'pending' });
+        return;
+      }
+
+      const statusData = JSON.parse(readFileSync(statusPath, 'utf-8')) as Record<string, unknown>;
+      const status = statusData.status as string;
+
+      if (status === 'editing') {
+        res.json({ status: 'editing' });
+        return;
+      }
+
+      if (status === 'edited') {
+        res.json({
+          status: 'edited',
+          editResult: statusData.editResult,
+        });
+        return;
+      }
+
+      if (status === 'error') {
+        res.json({
+          status: 'error',
+          error: statusData.error,
+        });
+        return;
+      }
+
+      res.json({ status });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Result fetch failed', { error: message });
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // ──────────────────────────────────────────
+  // GET /api/jobs/:jobId/video/edited
+  // ──────────────────────────────────────────
+  router.get('/jobs/:jobId/video/edited', (req, res) => {
+    try {
+      const { jobId } = req.params;
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
+
+      if (!existsSync(jobDir)) {
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      const videoPath = resolve(jobDir, 'edited.mp4');
+      if (!existsSync(videoPath)) {
+        res.status(404).json({ error: 'Edited video not ready' });
+        return;
+      }
+
+      const fileStat = statSync(videoPath);
+      const fileSize = fileStat.size;
+      const range = req.headers.range;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0]!, 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunkSize = end - start + 1;
+
+        const stream = createReadStream(videoPath, { start, end });
+
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunkSize,
+          'Content-Type': 'video/mp4',
+        });
+
+        stream.pipe(res);
+      } else {
+        res.writeHead(200, {
+          'Content-Length': fileSize,
+          'Content-Type': 'video/mp4',
+          'Accept-Ranges': 'bytes',
+        });
+
+        const stream = createReadStream(videoPath);
+        stream.pipe(res);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('Video stream failed', { error: message });
+      res.status(500).json({ error: message });
+    }
   });
 
   return router;

@@ -138,6 +138,18 @@
       "high": "גבוה"
     }
   },
+  "result": {
+    "title": "תוצאה",
+    "editing": "חותך ומרכיב סרטון...",
+    "ready": "הסרטון מוכן!",
+    "summary": "סיכום עריכה",
+    "originalDuration": "משך מקורי",
+    "editedDuration": "משך ערוך",
+    "removed": "נחתך",
+    "segmentsKept": "קטעים שנשמרו",
+    "download": "הורד סרטון",
+    "backToPlan": "חזרה לתוכנית"
+  },
   "language": {
     "he": "עברית",
     "en": "English"
