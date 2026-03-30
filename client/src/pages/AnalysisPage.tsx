@@ -57,28 +57,13 @@ function AnalysisPage() {
     }
   }, [jobId]);
 
+  // Start polling independently — always poll to pick up status changes
   useEffect(() => {
-    if (!jobId || startedRef.current) return;
-    startedRef.current = true;
+    if (!jobId) return;
 
-    const startProcessing = async () => {
-      try {
-        const res = await fetch(`/api/jobs/${jobId}/process`, { method: 'POST' });
-        if (!res.ok) {
-          setStartError(true);
-          return;
-        }
-
-        // Start polling
-        pollRef.current = setInterval(pollStatus, POLL_INTERVAL);
-        // Also poll immediately
-        pollStatus();
-      } catch {
-        setStartError(true);
-      }
-    };
-
-    startProcessing();
+    // Poll immediately, then on interval
+    pollStatus();
+    pollRef.current = setInterval(pollStatus, POLL_INTERVAL);
 
     return () => {
       if (pollRef.current) {
@@ -87,6 +72,28 @@ function AnalysisPage() {
       }
     };
   }, [jobId, pollStatus]);
+
+  // Fire the process call once
+  useEffect(() => {
+    if (!jobId || startedRef.current) return;
+    startedRef.current = true;
+
+    const startProcessing = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/process`, { method: 'POST' });
+        if (!res.ok) {
+          // 409 means already processing/analyzed — polling will handle it
+          if (res.status !== 409) {
+            setStartError(true);
+          }
+        }
+      } catch {
+        setStartError(true);
+      }
+    };
+
+    startProcessing();
+  }, [jobId]);
 
   const progress = jobStatus?.progress ?? {
     audio: { status: 'pending' as SubStepStatus },
@@ -111,17 +118,19 @@ function AnalysisPage() {
 
   const handleRetry = async () => {
     setStartError(false);
-    startedRef.current = false;
 
     try {
       const res = await fetch(`/api/jobs/${jobId}/process`, { method: 'POST' });
-      if (!res.ok) {
+      if (!res.ok && res.status !== 409) {
         setStartError(true);
         return;
       }
 
-      pollRef.current = setInterval(pollStatus, POLL_INTERVAL);
-      pollStatus();
+      // Restart polling if not already running
+      if (!pollRef.current) {
+        pollStatus();
+        pollRef.current = setInterval(pollStatus, POLL_INTERVAL);
+      }
     } catch {
       setStartError(true);
     }
