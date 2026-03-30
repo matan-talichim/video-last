@@ -329,11 +329,13 @@ function PreviewPage() {
         </div>
       </Card>
 
-      {/* Section 4 — Strong Points */}
-      {analysis.strongPoints.length > 0 && (
+      {/* Section 4 — Strong Points (excluding cut_or_tighten) */}
+      {analysis.strongPoints.filter((p) => p.suggestedAction !== 'cut_or_tighten').length > 0 && (
         <Card title={t('preview.strongPoints')}>
           <div className="flex flex-col gap-2">
-            {analysis.strongPoints.map((point, i) => (
+            {analysis.strongPoints
+              .filter((p) => p.suggestedAction !== 'cut_or_tighten')
+              .map((point, i) => (
               <div key={i} className="rounded-lg border border-green-800/50 bg-green-900/10 p-3">
                 <p className="text-gray-200">"{point.text}"</p>
                 <div className="mt-1 flex items-center justify-between">
