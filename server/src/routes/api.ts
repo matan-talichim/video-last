@@ -245,11 +245,17 @@ export function createApiRouter(config: AppConfig): Router {
       // Get preprocess options from config
       const preprocessStep = config.pipeline.steps.find((s) => s.name === 'preprocess');
       const stepOptions = preprocessStep?.options ?? {};
+      const audioScrubRaw = (config as unknown as Record<string, unknown>).audioScrub as
+        { enabled?: boolean; thresholdDb?: number } | undefined;
       const options = {
         audioSampleRate: (stepOptions.audioSampleRate as number) ?? 16000,
         proxyHeight: (stepOptions.proxyHeight as number) ?? 480,
         proxyFps: (stepOptions.proxyFps as number) ?? 10,
         frameInterval: (stepOptions.frameInterval as number) ?? 5,
+        audioScrub: {
+          enabled: audioScrubRaw?.enabled ?? true,
+          thresholdDb: audioScrubRaw?.thresholdDb ?? -26,
+        },
       };
 
       // Get presenter detection config

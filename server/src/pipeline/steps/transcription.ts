@@ -78,7 +78,13 @@ export async function runTranscription(
   logger: Logger,
 ): Promise<void> {
   const statusPath = join(jobDir, 'status.json');
-  const audioPath = join(jobDir, 'audio.wav');
+  const gatedAudioPath = join(jobDir, 'audio_gated.wav');
+  const originalAudioPath = join(jobDir, 'audio.wav');
+  const audioPath = existsSync(gatedAudioPath) ? gatedAudioPath : originalAudioPath;
+  logger.info('Transcription: selected audio file', {
+    selectedPath: audioPath,
+    gatedExists: existsSync(gatedAudioPath),
+  });
   const rawOutputPath = join(jobDir, 'transcript_raw.json');
   const outputPath = join(jobDir, 'transcript.json');
 
