@@ -3,7 +3,7 @@
 Merge transcript words with presenter segments — word-level output.
 
 For each word in transcript.json, checks overlap with presenter_segments.json.
-Words with >= 50% overlap with a presenter segment (+ buffer) are kept as presenter words.
+Words with >= 85% overlap with a presenter segment (+ buffer) are kept as presenter words.
 
 Output: JSON with flat word array (each word has id, word, start, end, is_presenter, confidence).
 Logs to stderr.
@@ -55,7 +55,7 @@ def is_presenter_word(word, segments, buffer):
         seg_end = seg["end"] + buffer
         total_overlap += compute_overlap(w_start, w_end, seg_start, seg_end)
 
-    return (total_overlap / w_duration) >= 0.5
+    return (total_overlap / w_duration) >= 0.85
 
 
 def main():
@@ -74,40 +74,13 @@ def main():
         print("[merge] No valid presenter_segments found, treating all words as presenter", file=sys.stderr)
         segments = []
 
-    # Detect primary speaker via diarization
-    speaker_counts = {}
-    for w in words:
-        spk = w.get("speaker")
-        if spk is not None:
-            speaker_counts[spk] = speaker_counts.get(spk, 0) + 1
-
-    primary_speaker = None
-    if speaker_counts:
-        primary_speaker = max(speaker_counts, key=speaker_counts.get)
-        print(
-            f"[merge] Primary speaker: {primary_speaker}, total speakers: {len(speaker_counts)}",
-            file=sys.stderr,
-        )
-    else:
-        print("[merge] No speaker diarization data found, using overlap only", file=sys.stderr)
-
-    # Build flat word array with sequential IDs
+    # Build flat word array with sequential IDs (overlap-only detection)
     word_list = []
     presenter_count = 0
     other_count = 0
 
     for idx, w in enumerate(words):
-        spk = w.get("speaker")
-
-        if spk is not None and primary_speaker is not None:
-            # Diarization available: veto non-primary speakers
-            if spk != primary_speaker:
-                is_pres = False
-            else:
-                is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
-        else:
-            # Fallback: no speaker info on this word, use overlap only
-            is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
+        is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
 
         entry = {
             "id": idx,
@@ -117,8 +90,6 @@ def main():
             "is_presenter": is_pres,
             "confidence": w.get("confidence", 0.0),
         }
-        if spk is not None:
-            entry["speaker"] = spk
 
         word_list.append(entry)
         if is_pres:

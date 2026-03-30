@@ -157,6 +157,11 @@ PRODUCTION INSTRUCTION DETECTION — CRITICAL RULES:
 
 5. Standalone filler between takes: Words like "אוקיי", "טוב", "יאללה" that appear after a pause and before a new sentence — always remove.
 
+6. DICTATION & ECHO EFFECT: If you see a phrase or sentence repeated almost
+   identically twice in a row, the first occurrence is often the producer
+   dictating the script. YOU MUST REMOVE THE FIRST OCCURRENCE entirely
+   (mark as "duplicate_take"). Only keep the final fluent delivery by the presenter.
+
 החזר JSON בפורמט הבא בלבד:
 {
   "remove_ranges": [
