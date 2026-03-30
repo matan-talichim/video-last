@@ -51,7 +51,7 @@
     "utterances": true,
     "punctuate": true,
     "words": true,
-    "paragraphs": true,
+    "paragraphs": true
   },
   "presenterDetection": {
     "lipThreshold": 0.25,
