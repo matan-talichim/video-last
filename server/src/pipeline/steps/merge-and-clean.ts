@@ -157,10 +157,20 @@ PRODUCTION INSTRUCTION DETECTION — CRITICAL RULES:
 
 5. Standalone filler between takes: Words like "אוקיי", "טוב", "יאללה" that appear after a pause and before a new sentence — always remove.
 
-6. DICTATION & ECHO EFFECT: If you see a phrase or sentence repeated almost
-   identically twice in a row, the first occurrence is often the producer
-   dictating the script. YOU MUST REMOVE THE FIRST OCCURRENCE entirely
-   (mark as "duplicate_take"). Only keep the final fluent delivery by the presenter.
+6. SHADOW DICTATION & BROKEN CONTEXT:
+   - If a short phrase (2-4 words) appears, is followed by a pause, and then
+     the SAME or SIMILAR phrase is repeated fluently — the first instance is
+     the producer dictating. REMOVE the first instance.
+   - If a sentence fragment interrupts the logical flow of the marketing message,
+     it is a shadow dictation. REMOVE IT.
+   - Rule: If keeping the words breaks the grammatical or logical flow of a
+     polished marketing video — REMOVE under "duplicate_take" or "production_instruction".
+
+7. LINE FEEDING (PROMPTER PATTERN):
+   The producer often whispers the next 2-4 words to remind the presenter what to say.
+   Pattern: [Presenter stops] → [Producer whispers 2-4 words] → [Presenter repeats same words]
+   ALWAYS remove the first occurrence (the producer's whisper).
+   Even if it's only 2 words — if they appear twice in sequence, remove the first.
 
 החזר JSON בפורמט הבא בלבד:
 {
@@ -258,7 +268,7 @@ function buildSegments(
       const prev = segWords[segWords.length - 1]!;
       const curr = keptWords[i]!;
 
-      if (curr.start - prev.end > 0.25) {
+      if (curr.start - prev.end > 0.5) {
         // Close current segment
         keepSegments.push({
           start: segWords[0]!.start,

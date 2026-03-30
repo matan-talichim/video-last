@@ -3,7 +3,7 @@
 Merge transcript words with presenter segments — word-level output.
 
 For each word in transcript.json, checks overlap with presenter_segments.json.
-Words with >= 85% overlap with a presenter segment (+ buffer) are kept as presenter words.
+Words with >= 60% overlap with a presenter segment (+ buffer) are kept as presenter words.
 
 Output: JSON with flat word array (each word has id, word, start, end, is_presenter, confidence).
 Logs to stderr.
@@ -37,7 +37,7 @@ def compute_overlap(word_start, word_end, seg_start, seg_end):
 
 
 def is_presenter_word(word, segments, buffer):
-    """Check if at least 50% of the word duration overlaps with any buffered segment."""
+    """Check if at least 60% of the word duration overlaps with any buffered segment."""
     w_start = word["start"]
     w_end = word["end"]
     w_duration = w_end - w_start
@@ -55,7 +55,7 @@ def is_presenter_word(word, segments, buffer):
         seg_end = seg["end"] + buffer
         total_overlap += compute_overlap(w_start, w_end, seg_start, seg_end)
 
-    return (total_overlap / w_duration) >= 0.85
+    return (total_overlap / w_duration) >= 0.60
 
 
 def main():
