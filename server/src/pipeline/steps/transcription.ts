@@ -12,6 +12,7 @@ interface TranscriptionWord {
   start: number;
   end: number;
   confidence: number;
+  speaker?: number;
 }
 
 interface TranscriptionUtterance {
@@ -49,6 +50,7 @@ interface TranscriptionConfig {
   punctuate: boolean;
   words: boolean;
   paragraphs: boolean;
+  diarize: boolean;
 }
 
 // ── Helpers ──────────────────────────────────────
@@ -127,6 +129,7 @@ export async function runTranscription(
       utterances: transcriptionConfig.utterances,
       punctuate: transcriptionConfig.punctuate,
       paragraphs: transcriptionConfig.paragraphs,
+      diarize: transcriptionConfig.diarize,
     },
   );
 
@@ -154,12 +157,18 @@ export async function runTranscription(
 
   // Extract words with timestamps
   const rawWords = (alternative as Record<string, unknown>).words as Array<Record<string, unknown>> ?? [];
-  const words: TranscriptionWord[] = rawWords.map((w) => ({
-    word: w.word as string,
-    start: w.start as number,
-    end: w.end as number,
-    confidence: w.confidence as number,
-  }));
+  const words: TranscriptionWord[] = rawWords.map((w) => {
+    const mapped: TranscriptionWord = {
+      word: w.word as string,
+      start: w.start as number,
+      end: w.end as number,
+      confidence: w.confidence as number,
+    };
+    if (w.speaker !== undefined && w.speaker !== null) {
+      mapped.speaker = w.speaker as number;
+    }
+    return mapped;
+  });
 
   // Extract utterances
   const rawUtterances = (result.results as unknown as Record<string, unknown>)?.utterances as Array<Record<string, unknown>> ?? [];
@@ -247,6 +256,7 @@ async function transcription(context: StepContext): Promise<StepResult> {
     punctuate: (config.punctuate as boolean) ?? true,
     words: (config.words as boolean) ?? true,
     paragraphs: (config.paragraphs as boolean) ?? true,
+    diarize: (config.diarize as boolean) ?? true,
   };
 
   await runTranscription(outputDir, transcriptionConfig, logger);

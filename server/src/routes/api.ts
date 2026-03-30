@@ -264,7 +264,7 @@ export function createApiRouter(config: AppConfig): Router {
 
       // Get transcription config
       const txConfig = (config as unknown as Record<string, unknown>).transcription as
-        { model?: string; language?: string; smartFormat?: boolean; utterances?: boolean; punctuate?: boolean; words?: boolean; paragraphs?: boolean } | undefined;
+        { model?: string; language?: string; smartFormat?: boolean; utterances?: boolean; punctuate?: boolean; words?: boolean; paragraphs?: boolean; diarize?: boolean } | undefined;
       const transcriptionConfig = {
         model: txConfig?.model ?? 'nova-3',
         language: txConfig?.language ?? 'he',
@@ -273,6 +273,7 @@ export function createApiRouter(config: AppConfig): Router {
         punctuate: txConfig?.punctuate ?? true,
         words: txConfig?.words ?? true,
         paragraphs: txConfig?.paragraphs ?? true,
+        diarize: txConfig?.diarize ?? true,
       };
 
       // Read settings for AI brain selection

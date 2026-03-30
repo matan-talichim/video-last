@@ -74,21 +74,53 @@ def main():
         print("[merge] No valid presenter_segments found, treating all words as presenter", file=sys.stderr)
         segments = []
 
+    # Detect primary speaker via diarization
+    speaker_counts = {}
+    for w in words:
+        spk = w.get("speaker")
+        if spk is not None:
+            speaker_counts[spk] = speaker_counts.get(spk, 0) + 1
+
+    primary_speaker = None
+    if speaker_counts:
+        primary_speaker = max(speaker_counts, key=speaker_counts.get)
+        print(
+            f"[merge] Primary speaker: {primary_speaker}, total speakers: {len(speaker_counts)}",
+            file=sys.stderr,
+        )
+    else:
+        print("[merge] No speaker diarization data found, using overlap only", file=sys.stderr)
+
     # Build flat word array with sequential IDs
     word_list = []
     presenter_count = 0
     other_count = 0
 
     for idx, w in enumerate(words):
-        is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
-        word_list.append({
+        spk = w.get("speaker")
+
+        if spk is not None and primary_speaker is not None:
+            # Diarization available: veto non-primary speakers
+            if spk != primary_speaker:
+                is_pres = False
+            else:
+                is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
+        else:
+            # Fallback: no speaker info on this word, use overlap only
+            is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
+
+        entry = {
             "id": idx,
             "word": w["word"],
             "start": w["start"],
             "end": w["end"],
             "is_presenter": is_pres,
             "confidence": w.get("confidence", 0.0),
-        })
+        }
+        if spk is not None:
+            entry["speaker"] = spk
+
+        word_list.append(entry)
         if is_pres:
             presenter_count += 1
         else:
