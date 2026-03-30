@@ -487,8 +487,8 @@ ${notes}
 
       const { data, usage } = await askAIJSON(revisionPrompt, {
         brain: aiBrain,
-        maxTokens: (config.ai as { maxTokens?: number })?.maxTokens ?? 4096,
-        timeout: (config.analysis as { timeout?: number })?.timeout ?? 120000,
+        maxTokens: config.ai.maxTokens ?? 4096,
+        timeout: config.analysis.timeout ?? 120000,
         logger,
       });
 
