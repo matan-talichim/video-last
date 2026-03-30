@@ -68,6 +68,10 @@
     "audioBitrate": "192k",
     "minSegmentDuration": 0.1
   },
+  "audioScrub": {
+    "enabled": true,
+    "thresholdDb": -26
+  },
   "ffmpeg": {
     "path": "ffmpeg",
     "ffprobePath": "ffprobe",

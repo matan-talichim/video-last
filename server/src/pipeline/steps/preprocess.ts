@@ -59,7 +59,7 @@ export async function runPreprocess(
   inputFile: string,
   ffmpegConfig: FFmpegConfig,
   logger: Logger,
-  options: { audioSampleRate: number; proxyHeight: number; proxyFps: number; frameInterval: number },
+  options: { audioSampleRate: number; proxyHeight: number; proxyFps: number; frameInterval: number; audioScrub: { enabled: boolean; thresholdDb: number } },
 ): Promise<void> {
   const statusPath = join(jobDir, 'status.json');
 
@@ -103,6 +103,38 @@ export async function runPreprocess(
     const audioMs = Date.now() - audioStart;
     preprocessStatus.progress.audio = { status: 'done', durationMs: audioMs };
     logger.info('Preprocess: audio extraction completed', { durationMs: audioMs, outputPath: audioPath });
+
+    // ── Step 1b: Create noise-gated audio ──────────
+    const audioScrubConfig = options.audioScrub;
+    if (audioScrubConfig.enabled) {
+      const gatedPath = join(jobDir, 'audio_gated.wav');
+      const gateStart = Date.now();
+      try {
+        const thresholdDb = audioScrubConfig.thresholdDb;
+        const gateArgs = [
+          '-i', audioPath,
+          '-af', `agate=threshold=${thresholdDb}dB:ratio=20:attack=10:release=250`,
+          gatedPath,
+        ];
+        logger.info('Preprocess: applying noise gate', {
+          command: `ffmpeg ${gateArgs.join(' ')}`,
+          thresholdDb,
+        });
+        await runFFmpeg(gateArgs, ffmpegConfig, logger);
+
+        const gateMs = Date.now() - gateStart;
+        logger.info('Preprocess: noise gate completed', { durationMs: gateMs, outputPath: gatedPath });
+      } catch (gateErr) {
+        const gateMs = Date.now() - gateStart;
+        const gateErrMsg = gateErr instanceof Error ? gateErr.message : String(gateErr);
+        logger.error('Preprocess: noise gate failed, transcription will use original audio', {
+          durationMs: gateMs,
+          error: gateErrMsg,
+        });
+      }
+    } else {
+      logger.info('Preprocess: audioScrub disabled, skipping noise gate');
+    }
   } catch (err) {
     const audioMs = Date.now() - audioStart;
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -212,11 +244,16 @@ export async function runPreprocess(
 async function preprocess(context: StepContext): Promise<StepResult> {
   const { originalFile, outputDir, logger, config } = context;
 
+  const audioScrubRaw = config.audioScrub as { enabled?: boolean; thresholdDb?: number } | undefined;
   const options = {
     audioSampleRate: (config.audioSampleRate as number) ?? 16000,
     proxyHeight: (config.proxyHeight as number) ?? 480,
     proxyFps: (config.proxyFps as number) ?? 10,
     frameInterval: (config.frameInterval as number) ?? 5,
+    audioScrub: {
+      enabled: audioScrubRaw?.enabled ?? true,
+      thresholdDb: audioScrubRaw?.thresholdDb ?? -26,
+    },
   };
 
   const ffmpegConfig = (config.ffmpeg as import('../../utils/config.js').FFmpegConfig) ?? {
