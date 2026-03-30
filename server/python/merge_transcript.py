@@ -13,6 +13,9 @@ import argparse
 import json
 import sys
 import time
+import wave
+
+import numpy as np
 
 
 def parse_args():
@@ -21,6 +24,7 @@ def parse_args():
     parser.add_argument("--segments", required=True, help="Path to presenter_segments.json")
     parser.add_argument("--output", required=True, help="Path to output merged_transcript.json")
     parser.add_argument("--buffer", type=float, default=0.25, help="Buffer in seconds around each segment")
+    parser.add_argument("--audio", default=None, help="Path to audio.wav for RMS volume filtering")
     return parser.parse_args()
 
 
@@ -34,6 +38,42 @@ def compute_overlap(word_start, word_end, seg_start, seg_end):
     overlap_start = max(word_start, seg_start)
     overlap_end = min(word_end, seg_end)
     return max(0.0, overlap_end - overlap_start)
+
+
+def load_audio(path):
+    """Load a WAV file and return (samples_as_float64, sample_rate)."""
+    with wave.open(path, "rb") as wf:
+        n_channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        sample_rate = wf.getframerate()
+        n_frames = wf.getnframes()
+        raw = wf.readframes(n_frames)
+
+    dtype_map = {1: np.int8, 2: np.int16, 4: np.int32}
+    dtype = dtype_map.get(sampwidth, np.int16)
+    samples = np.frombuffer(raw, dtype=dtype).astype(np.float64)
+
+    # If stereo, take first channel
+    if n_channels > 1:
+        samples = samples[::n_channels]
+
+    # Normalize to [-1, 1]
+    max_val = float(2 ** (sampwidth * 8 - 1))
+    samples = samples / max_val
+
+    return samples, sample_rate
+
+
+def compute_word_rms(audio_data, sample_rate, start, end):
+    """Compute RMS for a time range in the audio."""
+    start_sample = int(start * sample_rate)
+    end_sample = int(end * sample_rate)
+    start_sample = max(0, min(start_sample, len(audio_data)))
+    end_sample = max(start_sample, min(end_sample, len(audio_data)))
+    if end_sample <= start_sample:
+        return 0.0
+    segment = audio_data[start_sample:end_sample]
+    return float(np.sqrt(np.mean(segment ** 2)))
 
 
 def is_presenter_word(word, segments, buffer):
@@ -55,7 +95,7 @@ def is_presenter_word(word, segments, buffer):
         seg_end = seg["end"] + buffer
         total_overlap += compute_overlap(w_start, w_end, seg_start, seg_end)
 
-    return (total_overlap / w_duration) >= 0.60
+    return (total_overlap / w_duration) >= 0.55
 
 
 def main():
@@ -96,6 +136,46 @@ def main():
             presenter_count += 1
         else:
             other_count += 1
+
+    # ── Pass 2: RMS volume filtering ──
+    rms_filtered_count = 0
+    if args.audio:
+        try:
+            audio_data, sample_rate = load_audio(args.audio)
+
+            # Compute RMS for every word
+            for entry in word_list:
+                entry["rms"] = compute_word_rms(audio_data, sample_rate, entry["start"], entry["end"])
+
+            # Reference RMS = median of high-confidence presenter words
+            ref_rms_values = [
+                entry["rms"]
+                for entry in word_list
+                if entry["is_presenter"] and entry["confidence"] > 0.90 and entry["rms"] > 0
+            ]
+
+            if ref_rms_values:
+                reference_rms = float(np.median(ref_rms_values))
+                threshold = reference_rms * 0.40
+
+                for entry in word_list:
+                    if entry["is_presenter"] and entry["rms"] < threshold:
+                        entry["is_presenter"] = False
+                        rms_filtered_count += 1
+
+                # Update counters
+                presenter_count -= rms_filtered_count
+                other_count += rms_filtered_count
+
+                print(
+                    f"[merge] RMS filtering: reference_rms={reference_rms:.4f}, "
+                    f"threshold={threshold:.4f}, filtered_words={rms_filtered_count}",
+                    file=sys.stderr,
+                )
+            else:
+                print("[merge] RMS filtering: no high-confidence presenter words for reference, skipping", file=sys.stderr)
+        except Exception as e:
+            print(f"[merge] RMS filtering failed, skipping: {e}", file=sys.stderr)
 
     processing_time_ms = int((time.time() - start_time) * 1000)
 
