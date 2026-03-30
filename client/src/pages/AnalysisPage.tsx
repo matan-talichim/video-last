@@ -101,6 +101,14 @@ function AnalysisPage() {
   const isDone = jobStatus?.status === 'analyzed';
   const isError = jobStatus?.status === 'error';
 
+  useEffect(() => {
+    if (!isDone || !jobId) return;
+    const timer = setTimeout(() => {
+      navigate(`/preview/${jobId}`);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [isDone, jobId, navigate]);
+
   const handleRetry = async () => {
     setStartError(false);
     startedRef.current = false;
@@ -190,12 +198,6 @@ function AnalysisPage() {
                 <p className="text-center text-lg font-semibold text-green-400">
                   {t('analysis.allDone')}
                 </p>
-                <button
-                  onClick={() => navigate(`/preview/${jobId}`)}
-                  className="rounded-xl bg-blue-600 px-8 py-3 text-lg font-semibold text-white transition-colors hover:bg-blue-500"
-                >
-                  {t('preview.viewPlan')}
-                </button>
               </div>
             )}
           </>
