@@ -144,6 +144,36 @@
       "low": "Low",
       "medium": "Medium",
       "high": "High"
+    },
+    "sectionType": {
+      "hook": "HOOK",
+      "setup": "SETUP",
+      "content": "CONTENT",
+      "proof": "PROOF",
+      "cta": "CTA"
+    },
+    "priority": {
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "suggestedAction": {
+      "zoom_in": "Zoom In",
+      "cut_or_tighten": "Cut or Tighten",
+      "broll_overlay": "B-Roll Overlay",
+      "highlight_caption": "Highlight Caption",
+      "cta_card": "CTA Card",
+      "kinetic_text": "Kinetic Text",
+      "pattern_interrupt": "Pattern Interrupt",
+      "lead_form": "Lead Form",
+      "text_overlay_with_button": "Text Overlay with Button"
+    },
+    "effectType": {
+      "zoom_in": "Zoom In",
+      "zoom_out": "Zoom Out",
+      "cut": "Cut",
+      "fade": "Fade",
+      "highlight": "Highlight"
     }
   },
   "result": {

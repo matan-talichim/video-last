@@ -342,7 +342,7 @@ function PreviewPage() {
               className="flex items-center justify-between rounded-lg border border-gray-700 bg-gray-800/50 px-4 py-2"
             >
               <div className="flex items-center gap-3">
-                <SectionTypeBadge type={section.type} />
+                <SectionTypeBadge type={section.type} t={t} />
                 <span className="text-gray-300">{section.description}</span>
               </div>
               <span className="text-sm text-gray-500">
@@ -367,7 +367,7 @@ function PreviewPage() {
                   </span>
                 </div>
                 <span className="mt-1 inline-block rounded bg-green-800/30 px-2 py-0.5 text-xs text-green-300">
-                  {point.suggestedAction}
+                  {t(`preview.suggestedAction.${point.suggestedAction}`, { defaultValue: point.suggestedAction })}
                 </span>
               </div>
             ))}
@@ -389,7 +389,7 @@ function PreviewPage() {
                   </span>
                 </div>
                 <span className="mt-1 inline-block rounded bg-red-800/30 px-2 py-0.5 text-xs text-red-300">
-                  {point.suggestedAction}
+                  {t(`preview.suggestedAction.${point.suggestedAction}`, { defaultValue: point.suggestedAction })}
                 </span>
               </div>
             ))}
@@ -419,7 +419,7 @@ function PreviewPage() {
                     <span className="text-xs text-gray-500">
                       {formatTime(broll.start)} - {formatTime(broll.end)}
                     </span>
-                    <PriorityBadge priority={broll.priority} />
+                    <PriorityBadge priority={broll.priority} t={t} />
                   </div>
                 </div>
               </div>
@@ -448,7 +448,7 @@ function PreviewPage() {
                     key={i}
                     className="rounded bg-gray-700 px-2 py-1 text-xs text-gray-300"
                   >
-                    {effect.type} @ {formatTime(effect.start)} — {effect.reason}
+                    {t(`preview.effectType.${effect.type}`, { defaultValue: effect.type })} @ {formatTime(effect.start)} — {effect.reason}
                   </span>
                 ))}
               </div>
@@ -536,7 +536,7 @@ function InfoRow({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function SectionTypeBadge({ type }: { type: string }) {
+function SectionTypeBadge({ type, t }: { type: string; t: (key: string, options?: Record<string, string>) => string }) {
   const colors: Record<string, string> = {
     hook: 'bg-yellow-700 text-yellow-200',
     setup: 'bg-blue-700 text-blue-200',
@@ -548,12 +548,12 @@ function SectionTypeBadge({ type }: { type: string }) {
 
   return (
     <span className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${colorClass}`}>
-      {type}
+      {t(`preview.sectionType.${type}`, { defaultValue: type })}
     </span>
   );
 }
 
-function PriorityBadge({ priority }: { priority: string }) {
+function PriorityBadge({ priority, t }: { priority: string; t: (key: string, options?: Record<string, string>) => string }) {
   const colors: Record<string, string> = {
     high: 'bg-red-800/30 text-red-300',
     medium: 'bg-yellow-800/30 text-yellow-300',
@@ -563,7 +563,7 @@ function PriorityBadge({ priority }: { priority: string }) {
 
   return (
     <span className={`rounded px-2 py-0.5 text-xs ${colorClass}`}>
-      {priority}
+      {t(`preview.priority.${priority}`, { defaultValue: priority })}
     </span>
   );
 }

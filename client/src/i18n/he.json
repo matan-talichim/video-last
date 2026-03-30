@@ -144,6 +144,36 @@
       "low": "נמוך",
       "medium": "בינוני",
       "high": "גבוה"
+    },
+    "sectionType": {
+      "hook": "HOOK",
+      "setup": "SETUP",
+      "content": "CONTENT",
+      "proof": "PROOF",
+      "cta": "CTA"
+    },
+    "priority": {
+      "high": "גבוה",
+      "medium": "בינוני",
+      "low": "נמוך"
+    },
+    "suggestedAction": {
+      "zoom_in": "זום פנימה",
+      "cut_or_tighten": "חיתוך או קיצור",
+      "broll_overlay": "שכבת B-Roll",
+      "highlight_caption": "הדגשת כתובית",
+      "cta_card": "כרטיס CTA",
+      "kinetic_text": "טקסט קינטי",
+      "pattern_interrupt": "שבירת דפוס",
+      "lead_form": "טופס לידים",
+      "text_overlay_with_button": "טקסט עם כפתור"
+    },
+    "effectType": {
+      "zoom_in": "זום פנימה",
+      "zoom_out": "זום החוצה",
+      "cut": "חיתוך",
+      "fade": "פייד",
+      "highlight": "הדגשה"
     }
   },
   "result": {
