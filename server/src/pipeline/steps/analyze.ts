@@ -11,9 +11,18 @@ import { getAnalyzerPrompt } from '../../prompts/analyzer-prompt.js';
 
 // ── Types ────────────────────────────────────────
 
+interface TranscriptWord {
+  id: number;
+  word: string;
+  start: number;
+  end: number;
+  is_presenter: boolean;
+  confidence: number;
+}
+
 interface CleanedTranscript {
-  cleaned_text: string;
-  keep_segments: Array<{ start: number; end: number }>;
+  words: TranscriptWord[];
+  keep_segments: Array<{ start: number; end: number; word_ids: number[] }>;
   remove_segments: Array<{ start: number; end: number; reason: string }>;
   stats: Record<string, unknown>;
 }
@@ -47,6 +56,14 @@ interface AnalysisResult {
 }
 
 // ── Helpers ──────────────────────────────────────
+
+function buildCleanedText(transcript: CleanedTranscript): string {
+  const keepWordIds = new Set(transcript.keep_segments.flatMap((s) => s.word_ids));
+  return transcript.words
+    .filter((w) => w.is_presenter && keepWordIds.has(w.id))
+    .map((w) => w.word)
+    .join(' ');
+}
 
 function readStatusFile(statusPath: string): Record<string, unknown> {
   if (existsSync(statusPath)) {
@@ -236,18 +253,21 @@ export async function runAnalyze(
   const framesDir = join(jobDir, 'frames');
   const frames = await loadFramesAsBase64(framesDir, maxFrames, presenterSegments, logger);
 
-  // 5. Build system prompt
+  // 5. Build cleaned text from words array
+  const cleanedText = buildCleanedText(cleanedTranscript);
+
+  // 6. Build system prompt
   const systemPrompt = getAnalyzerPrompt({
     videoType: userSettings.videoType ?? 'general',
     targetDuration: userSettings.targetDuration ?? 'auto',
     template: userSettings.template ?? '',
   });
 
-  // 6. Build user prompt
+  // 7. Build user prompt
   let userPrompt = `הנה הנתונים של הסרטון:
 
 ## תמלול נקי:
-${cleanedTranscript.cleaned_text}
+${cleanedText}
 
 ## קטעי שמירה (timestamps):
 ${cleanedTranscript.keep_segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(2)}]`).join(', ')}
@@ -271,10 +291,10 @@ ${presenterSegments.segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(
 
 נתח את הסרטון והחזר תוכנית עריכה מלאה ב-JSON.`;
 
-  // 7. Send to AI
+  // 8. Send to AI
   logger.info('Starting AI analysis', {
     brain,
-    transcriptLength: cleanedTranscript.cleaned_text.length,
+    transcriptLength: cleanedText.length,
     framesCount: frames.length,
     timeout,
   });
@@ -323,7 +343,7 @@ ${presenterSegments.segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(
 
   const processingTimeMs = Date.now() - startTime;
 
-  // 8. Save analysis.json
+  // 9. Save analysis.json
   const analysisOutput = {
     ...data,
     metadata: {
@@ -354,7 +374,7 @@ ${presenterSegments.segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(
     processingTimeMs,
   });
 
-  // 9. Update status
+  // 10. Update status
   const finalStatus = readStatusFile(statusPath);
   const finalProgress = (finalStatus.progress as Record<string, unknown>) ?? {};
 
