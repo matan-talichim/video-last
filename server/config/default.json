@@ -59,6 +59,14 @@
     "buffer": 0.1,
     "pythonPath": "python3"
   },
+  "editAssembly": {
+    "padding": 0.05,
+    "fadeDuration": 0.03,
+    "crf": 18,
+    "preset": "medium",
+    "audioBitrate": "192k",
+    "minSegmentDuration": 0.1
+  },
   "ffmpeg": {
     "path": "ffmpeg",
     "ffprobePath": "ffprobe",

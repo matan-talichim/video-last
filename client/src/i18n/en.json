@@ -138,6 +138,18 @@
       "high": "High"
     }
   },
+  "result": {
+    "title": "Result",
+    "editing": "Cutting and assembling...",
+    "ready": "Video is ready!",
+    "summary": "Edit summary",
+    "originalDuration": "Original duration",
+    "editedDuration": "Edited duration",
+    "removed": "Removed",
+    "segmentsKept": "Segments kept",
+    "download": "Download video",
+    "backToPlan": "Back to plan"
+  },
   "language": {
     "he": "עברית",
     "en": "English"

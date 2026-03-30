@@ -1,0 +1,323 @@
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import type { FFmpegConfig } from '../../utils/config.js';
+import { runFFmpeg, getMediaInfo } from '../../utils/ffmpeg.js';
+import type { Logger } from '../../utils/logger.js';
+
+// ── Types ────────────────────────────────────────
+
+interface StructureSection {
+  type: string;
+  start: number;
+  end: number;
+  description: string;
+}
+
+interface ApprovedPlan {
+  structure: {
+    sections: StructureSection[];
+  };
+  [key: string]: unknown;
+}
+
+interface KeepSegment {
+  index: number;
+  start: number;
+  end: number;
+  type: string;
+}
+
+interface EditResult {
+  outputPath: string;
+  originalDuration: number;
+  editedDuration: number;
+  segmentsKept: number;
+  segmentsRemoved: number;
+  compressionRatio: string;
+}
+
+// ── Config defaults ──────────────────────────────
+
+const DEFAULT_PADDING = 0.05;       // 50ms
+const DEFAULT_FADE_DURATION = 0.03; // 30ms
+const DEFAULT_CRF = 18;
+const DEFAULT_PRESET = 'medium';
+const DEFAULT_AUDIO_BITRATE = '192k';
+const MIN_SEGMENT_DURATION = 0.1;   // skip segments shorter than 100ms
+
+// ── Helpers ──────────────────────────────────────
+
+function readStatus(statusPath: string): Record<string, unknown> {
+  if (existsSync(statusPath)) {
+    return JSON.parse(readFileSync(statusPath, 'utf-8')) as Record<string, unknown>;
+  }
+  return {};
+}
+
+function writeStatus(statusPath: string, data: Record<string, unknown>): void {
+  writeFileSync(statusPath, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+function mergeOverlapping(segments: KeepSegment[]): KeepSegment[] {
+  if (segments.length <= 1) return segments;
+
+  const sorted = [...segments].sort((a, b) => a.start - b.start);
+  const merged: KeepSegment[] = [sorted[0]!];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const current = sorted[i]!;
+    const last = merged[merged.length - 1]!;
+
+    if (current.start <= last.end) {
+      last.end = Math.max(last.end, current.end);
+      last.type = `${last.type}+${current.type}`;
+    } else {
+      merged.push(current);
+    }
+  }
+
+  return merged;
+}
+
+// ── Main export ──────────────────────────────────
+
+export async function runEditAssembly(
+  jobDir: string,
+  ffmpegConfig: FFmpegConfig,
+  logger: Logger,
+): Promise<void> {
+  const startTime = Date.now();
+  const statusPath = resolve(jobDir, 'status.json');
+  const tempDir = resolve(jobDir, 'temp');
+  const timestamp = Date.now();
+
+  logger.info('Edit assembly started', { jobDir });
+
+  // Update status to editing
+  const currentStatus = readStatus(statusPath);
+  const currentProgress = (currentStatus.progress ?? {}) as Record<string, unknown>;
+  writeStatus(statusPath, {
+    ...currentStatus,
+    status: 'editing',
+    progress: {
+      ...currentProgress,
+      editAssembly: { status: 'processing' },
+    },
+  });
+
+  try {
+    // ── Step 1: Read approved plan & build keep segments ──
+
+    const approvedPlanPath = resolve(jobDir, 'approved_plan.json');
+    if (!existsSync(approvedPlanPath)) {
+      throw new Error('approved_plan.json not found — approve a plan before editing');
+    }
+
+    const approvedPlan = JSON.parse(
+      readFileSync(approvedPlanPath, 'utf-8'),
+    ) as ApprovedPlan;
+
+    if (!approvedPlan.structure?.sections?.length) {
+      throw new Error('approved_plan has no structure.sections');
+    }
+
+    // Find original video file
+    const originalFiles = ['original.mov', 'original.mp4', 'original.avi', 'original.mkv', 'original.webm'];
+    let originalPath = '';
+    for (const f of originalFiles) {
+      const p = resolve(jobDir, f);
+      if (existsSync(p)) {
+        originalPath = p;
+        break;
+      }
+    }
+    if (!originalPath) {
+      throw new Error('Original video file not found');
+    }
+
+    // Get video duration
+    const mediaInfo = await getMediaInfo(originalPath, ffmpegConfig, logger);
+    const videoDuration = mediaInfo.duration;
+
+    logger.info('Original video info', {
+      duration: videoDuration,
+      codec: mediaInfo.codec,
+      resolution: `${mediaInfo.width}x${mediaInfo.height}`,
+    });
+
+    // Build keep segments from sections
+    const rawSegments: KeepSegment[] = approvedPlan.structure.sections.map((section, i) => ({
+      index: i,
+      start: section.start,
+      end: section.end,
+      type: section.type,
+    }));
+
+    // Sort chronologically and merge overlaps
+    const keepSegments = mergeOverlapping(rawSegments);
+
+    // Filter out segments that are too short
+    const validSegments = keepSegments.filter((seg) => {
+      const duration = seg.end - seg.start;
+      if (duration < MIN_SEGMENT_DURATION) {
+        logger.warn('Skipping segment — too short', {
+          type: seg.type,
+          start: seg.start,
+          end: seg.end,
+          duration,
+        });
+        return false;
+      }
+      return true;
+    });
+
+    if (validSegments.length === 0) {
+      throw new Error('No valid segments to keep after filtering');
+    }
+
+    logger.info('Keep segments built', {
+      total: approvedPlan.structure.sections.length,
+      afterMerge: keepSegments.length,
+      afterFilter: validSegments.length,
+    });
+
+    // ── Step 2 & 3: Cut segments with padding + fade ──
+
+    if (!existsSync(tempDir)) {
+      mkdirSync(tempDir, { recursive: true });
+    }
+
+    const segmentFiles: string[] = [];
+
+    for (let i = 0; i < validSegments.length; i++) {
+      const seg = validSegments[i]!;
+
+      // Apply padding
+      const actualStart = Math.max(0, seg.start - DEFAULT_PADDING);
+      const actualEnd = Math.min(videoDuration, seg.end + DEFAULT_PADDING);
+      const segDuration = actualEnd - actualStart;
+
+      const segmentFile = join(tempDir, `segment_${timestamp}_${String(i).padStart(3, '0')}.mp4`);
+
+      logger.info(`Cutting segment ${i + 1}/${validSegments.length}`, {
+        type: seg.type,
+        start: actualStart,
+        end: actualEnd,
+        duration: segDuration,
+      });
+
+      // Build audio fade filter: fade-in 30ms at start, fade-out 30ms at end
+      const fadeIn = `afade=t=in:st=0:d=${DEFAULT_FADE_DURATION}`;
+      const fadeOut = `afade=t=out:st=${Math.max(0, segDuration - DEFAULT_FADE_DURATION)}:d=${DEFAULT_FADE_DURATION}`;
+      const audioFilter = `${fadeIn},${fadeOut}`;
+
+      // Use original fps (fallback to 30)
+      const fps = mediaInfo.fps > 0 ? Math.round(mediaInfo.fps) : 30;
+
+      const args = [
+        '-ss', String(actualStart),
+        '-i', originalPath,
+        '-to', String(actualEnd - actualStart),
+        '-c:v', 'libx264',
+        '-preset', DEFAULT_PRESET,
+        '-crf', String(DEFAULT_CRF),
+        '-r', String(fps),
+        '-af', audioFilter,
+        '-c:a', 'aac',
+        '-b:a', DEFAULT_AUDIO_BITRATE,
+        '-avoid_negative_ts', 'make_zero',
+        segmentFile,
+      ];
+
+      await runFFmpeg(args, ffmpegConfig, logger);
+      segmentFiles.push(segmentFile);
+    }
+
+    logger.info('All segments cut', { count: segmentFiles.length });
+
+    // ── Step 5: Concat ──
+
+    const concatListPath = join(tempDir, `concat_list_${timestamp}.txt`);
+    const concatContent = segmentFiles.map((f) => `file '${f}'`).join('\n');
+    writeFileSync(concatListPath, concatContent, 'utf-8');
+
+    const outputPath = resolve(jobDir, 'edited.mp4');
+
+    logger.info('Concatenating segments', { outputPath });
+
+    const concatArgs = [
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', concatListPath,
+      '-c', 'copy',
+      outputPath,
+    ];
+
+    await runFFmpeg(concatArgs, ffmpegConfig, logger);
+
+    // ── Step 6: Cleanup ──
+
+    logger.info('Cleaning up temp files');
+    for (const f of segmentFiles) {
+      try { unlinkSync(f); } catch { /* ignore */ }
+    }
+    try { unlinkSync(concatListPath); } catch { /* ignore */ }
+
+    // ── Step 7: Get edited video info & update status ──
+
+    const editedInfo = await getMediaInfo(outputPath, ffmpegConfig, logger);
+    const editedDuration = editedInfo.duration;
+    const removedDuration = videoDuration - editedDuration;
+    const compressionRatio = editedDuration > 0
+      ? `${(videoDuration / editedDuration).toFixed(1)}:1`
+      : 'N/A';
+
+    const editResult: EditResult = {
+      outputPath: 'edited.mp4',
+      originalDuration: Math.round(videoDuration * 100) / 100,
+      editedDuration: Math.round(editedDuration * 100) / 100,
+      segmentsKept: validSegments.length,
+      segmentsRemoved: approvedPlan.structure.sections.length - validSegments.length,
+      compressionRatio,
+    };
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+    const updatedStatus = readStatus(statusPath);
+    const updatedProgress = (updatedStatus.progress ?? {}) as Record<string, unknown>;
+    writeStatus(statusPath, {
+      ...updatedStatus,
+      status: 'edited',
+      progress: {
+        ...updatedProgress,
+        editAssembly: { status: 'done', duration: `${elapsed}s` },
+      },
+      editResult,
+    });
+
+    logger.info('Edit assembly completed', {
+      editedDuration,
+      originalDuration: videoDuration,
+      removedDuration: Math.round(removedDuration * 100) / 100,
+      compressionRatio,
+      elapsed: `${elapsed}s`,
+    });
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.error('Edit assembly failed', { error: errorMsg });
+
+    const failedStatus = readStatus(statusPath);
+    const failedProgress = (failedStatus.progress ?? {}) as Record<string, unknown>;
+    writeStatus(statusPath, {
+      ...failedStatus,
+      status: 'error',
+      error: errorMsg,
+      progress: {
+        ...failedProgress,
+        editAssembly: { status: 'error', error: errorMsg },
+      },
+    });
+
+    throw err;
+  }
+}
