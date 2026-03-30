@@ -95,12 +95,14 @@ async function runMerge(
     { pythonPath?: string } | undefined;
   const pythonPath = pdConfig?.pythonPath ?? 'python3';
 
+  const audioPath = join(jobDir, 'audio.wav');
   const args = [
     scriptPath,
     '--transcript', transcriptPath,
     '--segments', segmentsPath,
     '--output', outputPath,
     '--buffer', '0.25',
+    '--audio', audioPath,
   ];
 
   logger.info('Running merge_transcript.py', { transcriptPath, segmentsPath });
