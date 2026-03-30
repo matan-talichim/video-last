@@ -229,7 +229,7 @@ export async function runAnalyze(
   // 4. Load frames (up to maxFrames, evenly spaced)
   const config = loadConfig();
   const analysisConfig = (config as unknown as Record<string, unknown>).analysis as
-    { timeout?: number; maxFrames?: number } | undefined;
+    { timeout?: number; maxFrames?: number; maxTokens?: number } | undefined;
   const maxFrames = analysisConfig?.maxFrames ?? 10;
   const timeout = analysisConfig?.timeout ?? 120000;
 
@@ -279,9 +279,6 @@ ${presenterSegments.segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(
     timeout,
   });
 
-  const aiConfig = (config as unknown as Record<string, unknown>).ai as
-    { maxTokens?: number } | undefined;
-
   let data: AnalysisResult;
   let usage: AIUsage;
 
@@ -289,7 +286,7 @@ ${presenterSegments.segments.map((s) => `[${s.start.toFixed(2)}-${s.end.toFixed(
     const result = await askAIJSON<AnalysisResult>(userPrompt, {
       brain,
       systemPrompt,
-      maxTokens: aiConfig?.maxTokens ?? 4096,
+      maxTokens: analysisConfig?.maxTokens ?? 8192,
       timeout,
       logger,
     });
