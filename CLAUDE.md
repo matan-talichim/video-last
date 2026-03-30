@@ -90,7 +90,11 @@
 
 ## Pipeline
 
-קובץ וידאו → [Step 1] → [Step 2] → ... → קובץ תוצאה
+קובץ וידאו → [Step 1] → [Step 2] → ... → [Step 7: Edit Assembly] → קובץ תוצאה
+
+### Step 7 — Edit Assembly
+- FFmpeg: חיתוך keep segments, padding 50ms, fade 30ms, concat → `edited.mp4`
+- approve מפעיל edit אוטומטית
 
 ## גלי בנייה
 
@@ -102,3 +106,22 @@
 - **גל 5** תוצרים — versions, revisions, export
 - **גל 6** מתקדם — brand kit, templates, dubbing
 - **גל 7** לימוד — self-improving system
+
+## סטטוס משימות
+
+| # | משימה | סטטוס | תיאור |
+|---|-------|-------|-------|
+| 7 | Edit Assembly | ✅ | חיתוך והרכבה FFmpeg (padding, fade, concat -c copy, ResultPage עם נגן) |
+
+## מבנה תיקיות (עיקרי)
+
+```
+server/src/pipeline/steps/
+  └── edit-assembly.ts        # Step 7 — חיתוך והרכבה FFmpeg
+
+client/src/pages/
+  └── ResultPage.tsx           # דף תוצאה עם נגן וידאו
+
+<output>/
+  └── edited.mp4               # קובץ תוצאה סופי
+```
