@@ -13,11 +13,17 @@ const execFileAsync = promisify(execFile);
 
 // ── Types ────────────────────────────────────────
 
+interface Word {
+  id: number;
+  word: string;
+  start: number;
+  end: number;
+  is_presenter: boolean;
+  confidence: number;
+}
+
 interface MergedTranscript {
-  presenter_words: Array<{ word: string; start: number; end: number; confidence: number }>;
-  other_words: Array<{ word: string; start: number; end: number; confidence: number; speaker: string }>;
-  presenter_text: string;
-  presenter_utterances: Array<{ text: string; start: number; end: number }>;
+  words: Word[];
   stats: {
     total_words: number;
     presenter_words: number;
@@ -27,19 +33,25 @@ interface MergedTranscript {
   };
 }
 
-interface CleanedUtterance {
-  text: string;
-  start: number;
-  end: number;
-  action: 'keep' | 'remove';
-  reason?: string;
+interface RemoveRange {
+  ids: number[];
+  reason: string;
 }
 
 interface AICleanResult {
-  cleaned_text: string;
-  cleaned_utterances: CleanedUtterance[];
-  removed_count: number;
-  removal_reasons: Record<string, number>;
+  remove_ranges: RemoveRange[];
+}
+
+interface KeepSegment {
+  start: number;
+  end: number;
+  word_ids: number[];
+}
+
+interface RemoveSegment {
+  start: number;
+  end: number;
+  reason: string;
 }
 
 // ── Helpers ──────────────────────────────────────
@@ -116,25 +128,31 @@ async function runMerge(
 
 // ── Step 2: Semantic cleanup (AI) ───────────────
 
-const CLEANUP_PROMPT = `קיבלת תמלול של חומרי גלם מסרטון פרזנטור. התמלול כבר עבר סינון ראשוני אבל עדיין עלולים להופיע בו:
-
-1. טייקים חוזרים — הפרזנטור אמר משפט ואז חזר עליו. השאר רק את הטייק האחרון (בדרך כלל הטוב יותר).
-2. הוראות הפקה — ביטויים כמו "נתחיל שוב", "מוכן?", "עוד פעם", "רגע רגע", "מההתחלה", "שנייה", "go", "תתחיל", "מצלמה רצה", "יאללה" — מחק אותם.
-3. מילות פתיחה מיותרות — "אוקיי אז", "טוב אז", "יאללה אז" בתחילת משפטים — מחק.
-
-החזר JSON בפורמט הבא:
-{
-  "cleaned_text": "הטקסט הנקי",
-  "cleaned_utterances": [
-    { "text": "...", "start": 0.52, "end": 4.50, "action": "keep" },
-    { "text": "...", "start": 5.10, "end": 6.20, "action": "remove", "reason": "duplicate take" },
-    { "text": "...", "start": 7.00, "end": 7.50, "action": "remove", "reason": "production instruction" }
-  ],
-  "removed_count": 5,
-  "removal_reasons": { "duplicate_take": 3, "production_instruction": 2 }
+function buildNumberedText(words: Word[]): string {
+  const presenterWords = words.filter((w) => w.is_presenter);
+  return presenterWords.map((w) => `[${w.id}] ${w.word}`).join(' ');
 }
 
-תמלול:
+const CLEANUP_PROMPT = `קיבלת תמלול של חומרי גלם מסרטון פרזנטור. הטקסט ממוספר — כל מילה מזוהה ב-ID ייחודי.
+
+עליך לזהות ולסמן להסרה:
+
+1. טייקים חוזרים — הפרזנטור אמר משפט ואז חזר עליו. השאר רק את הטייק האחרון (בדרך כלל הטוב יותר). סמן את הטייק הקודם להסרה.
+2. הוראות הפקה — ביטויים כמו "נתחיל שוב", "מוכן?", "עוד פעם", "רגע רגע", "מההתחלה", "שנייה", "go", "תתחיל", "מצלמה רצה", "יאללה" — סמן להסרה.
+3. מילות פתיחה מיותרות — "אוקיי אז", "טוב אז", "יאללה אז" בתחילת משפטים — סמן להסרה.
+
+החזר JSON בפורמט הבא בלבד:
+{
+  "remove_ranges": [
+    { "ids": [48, 49, 50], "reason": "duplicate_take" },
+    { "ids": [72, 73, 74, 75], "reason": "production_instruction" },
+    { "ids": [100, 101, 102], "reason": "filler_opening" }
+  ]
+}
+
+אם אין מה להסיר, החזר: { "remove_ranges": [] }
+
+טקסט ממוספר:
 `;
 
 async function runSemanticCleanup(
@@ -143,17 +161,15 @@ async function runSemanticCleanup(
   brain: AIBrain,
   logger: Logger,
 ): Promise<{ cleanResult: AICleanResult; usage: AIUsage }> {
-  // Build prompt with utterances and timestamps
-  const utteranceLines = merged.presenter_utterances.map(
-    (u) => `[${u.start.toFixed(2)}-${u.end.toFixed(2)}] ${u.text}`,
-  );
-  const userPrompt = CLEANUP_PROMPT + utteranceLines.join('\n');
+  const numberedText = buildNumberedText(merged.words);
+  const userPrompt = CLEANUP_PROMPT + numberedText;
 
   const aiConfig = loadConfig();
   const aiSettings = (aiConfig as unknown as Record<string, unknown>).ai as
     { timeout?: number; maxTokens?: number } | undefined;
 
-  logger.info('Starting semantic cleanup', { brain, utteranceCount: merged.presenter_utterances.length });
+  const presenterWords = merged.words.filter((w) => w.is_presenter);
+  logger.info('Starting semantic cleanup', { brain, presenterWordCount: presenterWords.length });
 
   const { data, usage } = await askAIJSON<AICleanResult>(userPrompt, {
     brain,
@@ -162,12 +178,113 @@ async function runSemanticCleanup(
     logger,
   });
 
+  // Ensure remove_ranges is an array
+  if (!Array.isArray(data.remove_ranges)) {
+    data.remove_ranges = [];
+  }
+
+  const totalRemoved = data.remove_ranges.reduce((sum, r) => sum + r.ids.length, 0);
+  const reasons: Record<string, number> = {};
+  for (const r of data.remove_ranges) {
+    reasons[r.reason] = (reasons[r.reason] ?? 0) + r.ids.length;
+  }
+
   logger.info('Semantic cleanup completed', {
-    removedCount: data.removed_count,
-    removalReasons: data.removal_reasons,
+    removeRanges: data.remove_ranges.length,
+    totalRemovedWords: totalRemoved,
+    removalReasons: reasons,
   });
 
   return { cleanResult: data, usage };
+}
+
+// ── Step 3: Build keep/remove segments from words ──
+
+function buildSegments(
+  allWords: Word[],
+  removeRanges: RemoveRange[],
+): { keepSegments: KeepSegment[]; removeSegments: RemoveSegment[] } {
+  // Collect all IDs to remove
+  const removeIdSet = new Set<number>();
+  const removeReasonMap = new Map<number, string>();
+  for (const range of removeRanges) {
+    for (const id of range.ids) {
+      removeIdSet.add(id);
+      removeReasonMap.set(id, range.reason);
+    }
+  }
+
+  // Filter: keep only presenter words that AI didn't mark for removal
+  const keptWords: Word[] = [];
+  const removedWords: Array<Word & { reason: string }> = [];
+
+  for (const w of allWords) {
+    if (removeIdSet.has(w.id)) {
+      removedWords.push({ ...w, reason: removeReasonMap.get(w.id) ?? 'ai_removal' });
+    } else if (!w.is_presenter) {
+      removedWords.push({ ...w, reason: 'non_presenter' });
+    } else {
+      keptWords.push(w);
+    }
+  }
+
+  // Build keep_segments: gap > 0.5s = new segment
+  const keepSegments: KeepSegment[] = [];
+  if (keptWords.length > 0) {
+    let segWords: Word[] = [keptWords[0]!];
+
+    for (let i = 1; i < keptWords.length; i++) {
+      const prev = segWords[segWords.length - 1]!;
+      const curr = keptWords[i]!;
+
+      if (curr.start - prev.end > 0.5) {
+        // Close current segment
+        keepSegments.push({
+          start: segWords[0]!.start,
+          end: segWords[segWords.length - 1]!.end,
+          word_ids: segWords.map((w) => w.id),
+        });
+        segWords = [curr];
+      } else {
+        segWords.push(curr);
+      }
+    }
+
+    // Flush last segment
+    if (segWords.length > 0) {
+      keepSegments.push({
+        start: segWords[0]!.start,
+        end: segWords[segWords.length - 1]!.end,
+        word_ids: segWords.map((w) => w.id),
+      });
+    }
+  }
+
+  // Build remove_segments: group consecutive removed words by reason
+  const sortedRemoved = [...removedWords].sort((a, b) => a.start - b.start);
+  const removeSegments: RemoveSegment[] = [];
+
+  if (sortedRemoved.length > 0) {
+    let segStart = sortedRemoved[0]!.start;
+    let segEnd = sortedRemoved[0]!.end;
+    let segReason = sortedRemoved[0]!.reason;
+
+    for (let i = 1; i < sortedRemoved.length; i++) {
+      const curr = sortedRemoved[i]!;
+      // Same reason and close together → extend segment
+      if (curr.reason === segReason && curr.start - segEnd <= 0.5) {
+        segEnd = curr.end;
+      } else {
+        removeSegments.push({ start: segStart, end: segEnd, reason: segReason });
+        segStart = curr.start;
+        segEnd = curr.end;
+        segReason = curr.reason;
+      }
+    }
+    removeSegments.push({ start: segStart, end: segEnd, reason: segReason });
+  }
+
+  return { keepSegments, removeSegments };
 }
 
 // ── Main exported function ──────────────────────
@@ -197,31 +314,31 @@ export async function runMergeAndClean(
   // Step 2: Semantic cleanup via AI
   const { cleanResult, usage } = await runSemanticCleanup(jobDir, merged, brain, logger);
 
+  // Step 3: Build keep/remove segments from word-level data
+  const { keepSegments, removeSegments } = buildSegments(merged.words, cleanResult.remove_ranges);
+
   const processingTimeMs = Date.now() - startTime;
 
-  // Build keep/remove segments from cleaned_utterances
-  const keepSegments = cleanResult.cleaned_utterances
-    .filter((u) => u.action === 'keep')
-    .map((u) => ({ start: u.start, end: u.end }));
-
-  const removeSegments = cleanResult.cleaned_utterances
-    .filter((u) => u.action === 'remove')
-    .map((u) => ({ start: u.start, end: u.end, reason: u.reason ?? 'unknown' }));
-
-  // Count cleaned words (approximate from cleaned_text)
-  const cleanedWords = cleanResult.cleaned_text.split(/\s+/).filter(Boolean).length;
+  // Count stats
+  const removeIdSet = new Set<number>();
+  for (const range of cleanResult.remove_ranges) {
+    for (const id of range.ids) {
+      removeIdSet.add(id);
+    }
+  }
+  const keptWords = merged.words.filter((w) => w.is_presenter && !removeIdSet.has(w.id));
 
   // Build final output
   const cleanedTranscript = {
-    cleaned_text: cleanResult.cleaned_text,
+    words: merged.words,
     keep_segments: keepSegments,
     remove_segments: removeSegments,
     stats: {
       original_words: merged.stats.total_words,
       presenter_words: merged.stats.presenter_words,
-      cleaned_words: cleanedWords,
+      cleaned_words: keptWords.length,
       removed_by_merge: merged.stats.other_words,
-      removed_by_ai: cleanResult.removed_count,
+      removed_by_ai: removeIdSet.size,
       ai_brain: brain,
       ai_cost_usd: usage.estimatedCostUSD,
       processing_time_ms: processingTimeMs,
@@ -236,9 +353,11 @@ export async function runMergeAndClean(
     outputPath,
     originalWords: merged.stats.total_words,
     presenterWords: merged.stats.presenter_words,
-    cleanedWords,
+    cleanedWords: keptWords.length,
     removedByMerge: merged.stats.other_words,
-    removedByAI: cleanResult.removed_count,
+    removedByAI: removeIdSet.size,
+    keepSegments: keepSegments.length,
+    removeSegments: removeSegments.length,
     brain,
     costUSD: usage.estimatedCostUSD.toFixed(4),
     processingTimeMs,
@@ -261,9 +380,10 @@ export async function runMergeAndClean(
     mergeAndClean: {
       originalWords: merged.stats.total_words,
       presenterWords: merged.stats.presenter_words,
-      cleanedWords,
+      cleanedWords: keptWords.length,
       removedByMerge: merged.stats.other_words,
-      removedByAI: cleanResult.removed_count,
+      removedByAI: removeIdSet.size,
+      keepSegments: keepSegments.length,
       brain,
       outputPath,
     },

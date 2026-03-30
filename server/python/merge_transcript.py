@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Merge transcript words with presenter segments.
+Merge transcript words with presenter segments — word-level output.
 
 For each word in transcript.json, checks overlap with presenter_segments.json.
 Words with >= 50% overlap with a presenter segment (+ buffer) are kept as presenter words.
 
-Output: JSON to stdout, logs to stderr.
+Output: JSON with flat word array (each word has id, word, start, end, is_presenter, confidence).
+Logs to stderr.
 """
 
 import argparse
@@ -57,41 +58,6 @@ def is_presenter_word(word, segments, buffer):
     return (total_overlap / w_duration) >= 0.5
 
 
-def build_utterances(presenter_words):
-    """Build contiguous utterances from presenter words.
-    Words with a gap > 0.5s start a new utterance."""
-    if not presenter_words:
-        return []
-
-    utterances = []
-    current_words = [presenter_words[0]]
-
-    for word in presenter_words[1:]:
-        prev_end = current_words[-1]["end"]
-        if word["start"] - prev_end > 0.5:
-            # Flush current utterance
-            text = " ".join(w["word"] for w in current_words)
-            utterances.append({
-                "text": text,
-                "start": current_words[0]["start"],
-                "end": current_words[-1]["end"],
-            })
-            current_words = [word]
-        else:
-            current_words.append(word)
-
-    # Flush last utterance
-    if current_words:
-        text = " ".join(w["word"] for w in current_words)
-        utterances.append({
-            "text": text,
-            "start": current_words[0]["start"],
-            "end": current_words[-1]["end"],
-        })
-
-    return utterances
-
-
 def main():
     args = parse_args()
     start_time = time.time()
@@ -108,45 +74,35 @@ def main():
         print("[merge] No valid presenter_segments found, treating all words as presenter", file=sys.stderr)
         segments = []
 
-    # If no segments, all words are presenter
-    if not segments:
-        presenter_words = [
-            {"word": w["word"], "start": w["start"], "end": w["end"], "confidence": w.get("confidence", 0.0)}
-            for w in words
-        ]
-        other_words = []
-    else:
-        presenter_words = []
-        other_words = []
-        for w in words:
-            entry = {
-                "word": w["word"],
-                "start": w["start"],
-                "end": w["end"],
-                "confidence": w.get("confidence", 0.0),
-            }
-            if is_presenter_word(w, segments, args.buffer):
-                presenter_words.append(entry)
-            else:
-                entry["speaker"] = "other"
-                other_words.append(entry)
+    # Build flat word array with sequential IDs
+    word_list = []
+    presenter_count = 0
+    other_count = 0
 
-    presenter_text = " ".join(w["word"] for w in presenter_words)
-    presenter_utterances = build_utterances(presenter_words)
+    for idx, w in enumerate(words):
+        is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
+        word_list.append({
+            "id": idx,
+            "word": w["word"],
+            "start": w["start"],
+            "end": w["end"],
+            "is_presenter": is_pres,
+            "confidence": w.get("confidence", 0.0),
+        })
+        if is_pres:
+            presenter_count += 1
+        else:
+            other_count += 1
 
     processing_time_ms = int((time.time() - start_time) * 1000)
 
-    total = len(words)
     result = {
-        "presenter_words": presenter_words,
-        "other_words": other_words,
-        "presenter_text": presenter_text,
-        "presenter_utterances": presenter_utterances,
+        "words": word_list,
         "stats": {
-            "total_words": total,
-            "presenter_words": len(presenter_words),
-            "other_words": len(other_words),
-            "filter_ratio": round(len(presenter_words) / total, 2) if total > 0 else 1.0,
+            "total_words": len(words),
+            "presenter_words": presenter_count,
+            "other_words": other_count,
+            "filter_ratio": round(presenter_count / len(words), 2) if words else 1.0,
             "processing_time_ms": processing_time_ms,
         },
     }
@@ -158,7 +114,7 @@ def main():
     # Also write to stdout
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
 
-    print(f"\n[merge] Done: {len(presenter_words)}/{total} presenter words, {processing_time_ms}ms", file=sys.stderr)
+    print(f"\n[merge] Done: {presenter_count}/{len(words)} presenter words, {processing_time_ms}ms", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@
     "pythonPath": "python3"
   },
   "editAssembly": {
-    "padding": 0.05,
+    "padding": 0.02,
     "fadeDuration": 0.03,
     "crf": 18,
     "preset": "medium",
