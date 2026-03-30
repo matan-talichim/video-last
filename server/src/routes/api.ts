@@ -139,7 +139,7 @@ export function createApiRouter(config: AppConfig): Router {
       const { jobId } = req.params;
       const settings = req.body;
 
-      const jobDir = resolve(config.editor.inputDir, jobId!);
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
       if (!existsSync(jobDir)) {
         logger.warn('Settings save — job not found', { jobId });
         res.status(404).json({ error: 'Job not found' });
@@ -169,7 +169,7 @@ export function createApiRouter(config: AppConfig): Router {
   router.get('/jobs/:jobId', (req, res) => {
     try {
       const { jobId } = req.params;
-      const jobDir = resolve(config.editor.inputDir, jobId!);
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
 
       if (!existsSync(jobDir)) {
         res.status(404).json({ error: 'Job not found' });
@@ -200,7 +200,7 @@ export function createApiRouter(config: AppConfig): Router {
   router.post('/jobs/:jobId/process', (req, res) => {
     try {
       const { jobId } = req.params;
-      const jobDir = resolve(config.editor.inputDir, jobId!);
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
 
       if (!existsSync(jobDir)) {
         logger.warn('Process — job not found', { jobId });
@@ -331,7 +331,7 @@ export function createApiRouter(config: AppConfig): Router {
   router.get('/jobs/:jobId/status', (req, res) => {
     try {
       const { jobId } = req.params;
-      const jobDir = resolve(config.editor.inputDir, jobId!);
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
 
       if (!existsSync(jobDir)) {
         res.status(404).json({ error: 'Job not found' });
@@ -372,7 +372,7 @@ export function createApiRouter(config: AppConfig): Router {
   router.get('/jobs/:jobId/analysis', (req, res) => {
     try {
       const { jobId } = req.params;
-      const jobDir = resolve(config.editor.inputDir, jobId!);
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
 
       if (!existsSync(jobDir)) {
         res.status(404).json({ error: 'Job not found' });
@@ -400,7 +400,7 @@ export function createApiRouter(config: AppConfig): Router {
   router.post('/jobs/:jobId/analysis/approve', (req, res) => {
     try {
       const { jobId } = req.params;
-      const jobDir = resolve(config.editor.inputDir, jobId!);
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
 
       if (!existsSync(jobDir)) {
         logger.warn('Approve — job not found', { jobId });
@@ -440,7 +440,7 @@ export function createApiRouter(config: AppConfig): Router {
     const { jobId } = req.params;
 
     try {
-      const jobDir = resolve(config.editor.inputDir, jobId!);
+      const jobDir = resolve(config.editor.inputDir, String(jobId));
 
       if (!existsSync(jobDir)) {
         logger.warn('Revise — job not found', { jobId });
