@@ -38,6 +38,26 @@ interface RemoveRange {
   reason: string;
 }
 
+interface TakeDecision {
+  ids: number[];
+  reason: string;
+  kept_ids?: number[];
+}
+
+interface TakeDecisions {
+  remove_ids: number[];
+  decisions: TakeDecision[];
+  stats: {
+    duplicates_found: number;
+    false_starts: number;
+    production_cues: number;
+    stutters: number;
+    abandoned_takes: number;
+    total_removed_words: number;
+  };
+  processing_time_ms: number;
+}
+
 interface AICleanResult {
   remove_ranges: RemoveRange[];
 }
@@ -128,12 +148,78 @@ async function runMerge(
   return result;
 }
 
+// ── Step 1.5: Take Selector (Python, rule-based) ──
+
+async function runTakeSelector(
+  jobDir: string,
+  logger: Logger,
+): Promise<TakeDecisions> {
+  const mergedPath = join(jobDir, 'merged_transcript.json');
+  const audioPath = join(jobDir, 'audio.wav');
+  const outputPath = join(jobDir, 'take_decisions.json');
+
+  const scriptPath = resolve('python', 'take_selector.py');
+
+  const config = loadConfig();
+  const pdConfig = (config as unknown as Record<string, unknown>).presenterDetection as
+    { pythonPath?: string } | undefined;
+  const pythonPath = pdConfig?.pythonPath ?? 'python3';
+
+  const tsConfig = (config as unknown as Record<string, unknown>).takeSelector as
+    { enabled?: boolean; similarityThreshold?: number; lookbackSeconds?: number; scoringOverrideMargin?: number } | undefined;
+
+  if (tsConfig?.enabled === false) {
+    logger.info('Take selector disabled in config, skipping');
+    return { remove_ids: [], decisions: [], stats: { duplicates_found: 0, false_starts: 0, production_cues: 0, stutters: 0, abandoned_takes: 0, total_removed_words: 0 }, processing_time_ms: 0 };
+  }
+
+  const args = [
+    scriptPath,
+    '--words', mergedPath,
+    '--output', outputPath,
+    '--video-type', 'general',
+  ];
+
+  if (existsSync(audioPath)) {
+    args.push('--audio', audioPath);
+  }
+
+  if (tsConfig?.similarityThreshold !== undefined) {
+    args.push('--similarity-threshold', String(tsConfig.similarityThreshold));
+  }
+  if (tsConfig?.lookbackSeconds !== undefined) {
+    args.push('--lookback-seconds', String(tsConfig.lookbackSeconds));
+  }
+  if (tsConfig?.scoringOverrideMargin !== undefined) {
+    args.push('--scoring-override-margin', String(tsConfig.scoringOverrideMargin));
+  }
+
+  logger.info('Running take_selector.py', { mergedPath });
+
+  const { stdout, stderr } = await execFileAsync(pythonPath, args, {
+    timeout: 60000,
+  });
+
+  if (stderr) {
+    logger.debug('take_selector.py stderr', { stderr: stderr.trim() });
+  }
+
+  const result = JSON.parse(stdout) as TakeDecisions;
+
+  logger.info(`Take selector: ${result.stats.total_removed_words} words marked for removal (${result.stats.duplicates_found} duplicates, ${result.stats.false_starts} false_starts, ${result.stats.production_cues} cues, ${result.stats.stutters} stutters, ${result.stats.abandoned_takes} abandoned)`);
+
+  return result;
+}
+
 // ── Step 2: Semantic cleanup (AI) ───────────────
 
-function buildNumberedText(words: Word[]): string {
-  return words.map((w) =>
-    w.is_presenter ? `[${w.id}] ${w.word}` : `*[${w.id}] ${w.word}*`
-  ).join(' ');
+function buildNumberedText(words: Word[], takeSelectorIds?: Set<number>): string {
+  return words.map((w) => {
+    if (takeSelectorIds?.has(w.id)) {
+      return `~[${w.id}] ${w.word}~`;
+    }
+    return w.is_presenter ? `[${w.id}] ${w.word}` : `*[${w.id}] ${w.word}*`;
+  }).join(' ');
 }
 
 const CLEANUP_PROMPT = `You are cleaning a Hebrew video transcript for a marketing video editor.
@@ -144,6 +230,10 @@ Words marked with asterisks (*) were flagged as suspected non-presenter speech
 - If a starred word completes the presenter's sentence and makes grammatical sense —
   it may be a false positive. KEEP it.
 - When in doubt about starred words — KEEP.
+
+Words marked with tilde (~) were identified as duplicate takes, false starts,
+or production cues by automated rule-based analysis.
+You should CONFIRM their removal unless you see a clear reason to keep them.
 
 Your job: identify ONLY clear junk to remove. When in doubt — KEEP.
 
@@ -191,8 +281,9 @@ async function runSemanticCleanup(
   merged: MergedTranscript,
   brain: AIBrain,
   logger: Logger,
+  takeSelectorIds?: Set<number>,
 ): Promise<{ cleanResult: AICleanResult; usage: AIUsage }> {
-  const numberedText = buildNumberedText(merged.words);
+  const numberedText = buildNumberedText(merged.words, takeSelectorIds);
   const userPrompt = CLEANUP_PROMPT + numberedText;
 
   const aiConfig = loadConfig();
@@ -343,11 +434,21 @@ export async function runMergeAndClean(
   // Step 1: Merge
   const merged = await runMerge(jobDir, logger);
 
-  // Step 2: Semantic cleanup via AI
-  const { cleanResult, usage } = await runSemanticCleanup(jobDir, merged, brain, logger);
+  // Step 1.5: Take selector (rule-based duplicate detection)
+  const takeDecisions = await runTakeSelector(jobDir, logger);
+  const takeSelectorIds = new Set(takeDecisions.remove_ids);
+
+  // Step 2: Semantic cleanup via AI (with take selector hints)
+  const { cleanResult, usage } = await runSemanticCleanup(jobDir, merged, brain, logger, takeSelectorIds);
+
+  // Merge remove ranges: take selector + AI
+  const allRemoveRanges: RemoveRange[] = [
+    ...takeDecisions.decisions.map((d) => ({ ids: d.ids, reason: d.reason })),
+    ...cleanResult.remove_ranges,
+  ];
 
   // Step 3: Build keep/remove segments from word-level data
-  const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, cleanResult.remove_ranges);
+  const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, allRemoveRanges);
 
   // Filter out invalid segments (start >= end) and micro-segments (< 0.8s)
   const MIN_KEEP_SEGMENT_DURATION = 0.8;
@@ -368,9 +469,15 @@ export async function runMergeAndClean(
 
   // Count stats
   const removeIdSet = new Set<number>();
-  for (const range of cleanResult.remove_ranges) {
+  for (const range of allRemoveRanges) {
     for (const id of range.ids) {
       removeIdSet.add(id);
+    }
+  }
+  const aiOnlyRemoveIds = new Set<number>();
+  for (const range of cleanResult.remove_ranges) {
+    for (const id of range.ids) {
+      aiOnlyRemoveIds.add(id);
     }
   }
   const keptWords = merged.words.filter((w) => w.is_presenter && !removeIdSet.has(w.id));
@@ -385,7 +492,8 @@ export async function runMergeAndClean(
       presenter_words: merged.stats.presenter_words,
       cleaned_words: keptWords.length,
       removed_by_merge: merged.stats.other_words,
-      removed_by_ai: removeIdSet.size,
+      removed_by_take_selector: takeSelectorIds.size,
+      removed_by_ai: aiOnlyRemoveIds.size,
       ai_brain: brain,
       ai_cost_usd: usage.estimatedCostUSD,
       processing_time_ms: processingTimeMs,
@@ -402,7 +510,8 @@ export async function runMergeAndClean(
     presenterWords: merged.stats.presenter_words,
     cleanedWords: keptWords.length,
     removedByMerge: merged.stats.other_words,
-    removedByAI: removeIdSet.size,
+    removedByTakeSelector: takeSelectorIds.size,
+    removedByAI: aiOnlyRemoveIds.size,
     keepSegments: keepSegments.length,
     removeSegments: removeSegments.length,
     brain,
@@ -429,7 +538,8 @@ export async function runMergeAndClean(
       presenterWords: merged.stats.presenter_words,
       cleanedWords: keptWords.length,
       removedByMerge: merged.stats.other_words,
-      removedByAI: removeIdSet.size,
+      removedByTakeSelector: takeSelectorIds.size,
+      removedByAI: aiOnlyRemoveIds.size,
       keepSegments: keepSegments.length,
       brain,
       outputPath,
