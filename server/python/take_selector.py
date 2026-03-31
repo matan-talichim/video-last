@@ -67,7 +67,7 @@ HEBREW_FILLERS = [
 ]
 
 # Thresholds (defaults, overridable via config)
-SIMILARITY_THRESHOLD = 0.85
+SIMILARITY_THRESHOLD = 0.70
 LOOKBACK_SECONDS = 15.0
 SCORING_OVERRIDE_MARGIN = 0.20
 TARGET_WPS = 2.7
@@ -384,7 +384,7 @@ def detect_false_starts(presenter_words, already_removed):
 
 def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec):
     """
-    Section 4.1: Sliding window 4-gram comparison.
+    Section 4.1: Sliding window 3-gram comparison.
     Cosine > threshold within lookback window.
     First occurrence = duplicate (remove), last = keep.
     """
@@ -394,13 +394,13 @@ def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec
     # Filter to active words
     active = [w for w in presenter_words if w["id"] not in already_removed]
 
-    if len(active) < 4:
+    if len(active) < 3:
         return remove_ids, decisions
 
-    # Build 4-grams with their word objects
+    # Build 3-grams with their word objects
     grams = []
-    for i in range(len(active) - 3):
-        gram_words = active[i:i + 4]
+    for i in range(len(active) - 2):
+        gram_words = active[i:i + 3]
         gram_text = [w["word"].strip() for w in gram_words]
         grams.append({
             "text": gram_text,
@@ -593,12 +593,24 @@ def apply_take_scoring(decisions, presenter_words, audio_data, sample_rate, over
 
 # ── Priority & Protection ────────────────────────────
 
-def apply_coarticulation_protection(remove_ids, presenter_words):
+def apply_coarticulation_protection(remove_ids, presenter_words, decisions):
     """
     CRITICAL rule 3: If gap between two consecutive words < 20ms,
     they are coarticulated — NEVER cut between them.
     If one is marked for removal and the other isn't, restore the marked one.
+
+    Coarticulation protection applies ONLY to individual word removals
+    (stutters, isolated fillers). NOT to entire duplicate takes,
+    production cues, or abandoned takes. If a word is part of a group
+    removal → coarticulation does NOT restore it.
     """
+    # Build set of word IDs that belong to group removals (not individual)
+    group_removal_reasons = {"duplicate_take", "production_cue", "abandoned_take", "false_start"}
+    group_removal_ids = set()
+    for dec in decisions:
+        if dec["reason"] in group_removal_reasons:
+            group_removal_ids.update(dec["ids"])
+
     restored = set()
     for i in range(len(presenter_words) - 1):
         curr = presenter_words[i]
@@ -609,9 +621,10 @@ def apply_coarticulation_protection(remove_ids, presenter_words):
             curr_removed = curr["id"] in remove_ids
             nxt_removed = nxt["id"] in remove_ids
             # If only one of the pair is removed → restore it (don't cut)
-            if curr_removed and not nxt_removed:
+            # But skip if the word is part of a group removal
+            if curr_removed and not nxt_removed and curr["id"] not in group_removal_ids:
                 restored.add(curr["id"])
-            elif nxt_removed and not curr_removed:
+            elif nxt_removed and not curr_removed and nxt["id"] not in group_removal_ids:
                 restored.add(nxt["id"])
 
     if restored:
@@ -621,11 +634,22 @@ def apply_coarticulation_protection(remove_ids, presenter_words):
     return remove_ids, restored
 
 
-def apply_fragment_protection(remove_ids, presenter_words):
+def apply_fragment_protection(remove_ids, presenter_words, decisions):
     """
     If removal would leave < MIN_SEGMENT_WORDS in a segment, don't remove.
     Segments are groups of consecutive kept words (gap < 600ms).
+
+    Fragment protection applies ONLY when removing isolated words,
+    NOT when removing entire duplicate takes, production cues, or
+    abandoned takes.
     """
+    # Build set of word IDs that belong to group removals
+    group_removal_reasons = {"duplicate_take", "production_cue", "abandoned_take", "false_start"}
+    group_removal_ids = set()
+    for dec in decisions:
+        if dec["reason"] in group_removal_reasons:
+            group_removal_ids.update(dec["ids"])
+
     # Build segments of remaining words
     remaining = [w for w in presenter_words if w["id"] not in remove_ids]
     if not remaining:
@@ -646,14 +670,14 @@ def apply_fragment_protection(remove_ids, presenter_words):
     restored = set()
     for seg in segments:
         if len(seg) < MIN_SEGMENT_WORDS:
-            # This segment is too small — find which removals border it
             seg_start = seg[0]["start"]
             seg_end = seg[-1]["end"]
-            # Find removed words adjacent to this segment
             for w in presenter_words:
                 if w["id"] not in remove_ids:
                     continue
-                # Word is within 600ms of segment boundaries
+                # Skip words that are part of group removals
+                if w["id"] in group_removal_ids:
+                    continue
                 if (seg_start - 0.6) <= w["start"] <= (seg_end + 0.6):
                     restored.add(w["id"])
 
@@ -802,11 +826,21 @@ def main():
     for dec in all_decisions:
         all_remove_ids.update(dec["ids"])
 
+    pre_protection_groups = len(all_decisions)
+    pre_protection_words = len(all_remove_ids)
+    log(f"Before protections: {pre_protection_groups} groups ({pre_protection_words} words)")
+
     # 7. Coarticulation protection (CRITICAL rule 3)
-    all_remove_ids, coart_restored = apply_coarticulation_protection(all_remove_ids, presenter_words)
+    #    Only applies to individual word removals (stutters), NOT group removals
+    all_remove_ids, coart_restored = apply_coarticulation_protection(all_remove_ids, presenter_words, all_decisions)
 
     # 8. Fragment protection
-    all_remove_ids = apply_fragment_protection(all_remove_ids, presenter_words)
+    #    Only applies to individual word removals, NOT group removals
+    all_remove_ids = apply_fragment_protection(all_remove_ids, presenter_words, all_decisions)
+
+    post_protection_words = len(all_remove_ids)
+    restored_count = pre_protection_words - post_protection_words
+    log(f"After protections: {pre_protection_groups} groups ({post_protection_words} words) — {restored_count} restored")
 
     # 9. Deduplicate and clean decisions (priority-based conflict resolution)
     all_decisions = deduplicate_decisions(all_decisions, all_remove_ids)

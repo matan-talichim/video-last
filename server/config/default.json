@@ -70,7 +70,7 @@
   },
   "takeSelector": {
     "enabled": true,
-    "similarityThreshold": 0.85,
+    "similarityThreshold": 0.70,
     "lookbackSeconds": 15,
     "scoringOverrideMargin": 0.20
   },
