@@ -257,6 +257,14 @@ INSTRUCTIONS:
    - CRITICAL: List EVERY SINGLE ID in a chosen take. Do not skip numbers.
      If the take spans ID 40 to 50, output [40,41,42,43,44,45,46,47,48,49,50].
      Missing even one ID will cut a word from the video.
+   - INTERNAL RETAKES: Sometimes within a single take, the presenter starts
+     a sentence, stumbles, and restarts the same sentence WITHOUT a long pause.
+     If you see the same 3+ words appearing twice within a selected segment,
+     keep only the SECOND (later) occurrence. Start the segment from the
+     restart point, not from the failed first attempt.
+   - WATCH FOR STUTTERS: Inside your chosen take, make sure the presenter
+     didn't start a sentence, stop, and restart it immediately. If there is
+     a false start inside the take, exclude the failed words from your sequence.
 
 RETURN FORMAT:
 {
