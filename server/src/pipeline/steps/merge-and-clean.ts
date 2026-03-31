@@ -277,13 +277,26 @@ INSTRUCTIONS:
      ALSO: If you see stutters like "לא לא" or "מחליף מחליף" (same word twice
      in a row), keep only one occurrence.
 
-   - COMPLETE SENTENCES ONLY:
-     Every segment you output MUST be a grammatically complete thought.
-     - Do NOT start a segment mid-sentence (e.g., starting with "לך שהחיסכון...")
-     - Do NOT end a segment with a hanging word (e.g., ending with "...לא")
-     - If you can't find a complete version of a sentence, skip it entirely.
-       A shorter video with complete sentences is ALWAYS better than a longer
-       video with broken fragments.
+   - COMPLETE SENTENCES ONLY — THIS IS CRITICAL:
+     BEFORE outputting your final keep_ranges, review EACH segment and verify:
+
+     1. Does it START with the beginning of a sentence?
+        BAD: "לך שהחיסכון החודשי..." (starts mid-sentence with "לך")
+        GOOD: "ואם אני לא מראה לך שהחיסכון החודשי..."
+
+     2. Does it END with a complete thought?
+        BAD: "...ולא מחליף" (hanging, no object)
+        GOOD: "...ולא מחליף כלים" or "...ולא מחליף את הצוות"
+
+     3. Can it stand ALONE as a meaningful statement?
+        BAD: "מאחורי הקלעים התוצאה" (what result? incomplete)
+        GOOD: "מאחורי הקלעים התוצאה היא פשוטה" (complete thought)
+
+     If a segment fails ANY of these checks — either extend it to include
+     the missing words, find a better version elsewhere, or REMOVE IT ENTIRELY.
+
+     A 25-second video with 5 perfect segments beats a 35-second video
+     with 8 segments where 3 are broken.
 
    - MINIMUM SEGMENT LENGTH: Each segment you select should be at least
      4 words and approximately 2+ seconds long. If a segment would be
@@ -493,7 +506,7 @@ export async function runMergeAndClean(
   const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, effectiveRemoveRanges);
 
   // Filter out invalid segments (start >= end) and micro-segments (< 0.8s)
-  const MIN_KEEP_SEGMENT_DURATION = 1.5;
+  const MIN_KEEP_SEGMENT_DURATION = 2.0;
   const keepSegments = rawKeepSegments.filter((seg) => {
     if (seg.start >= seg.end) {
       logger.warn('Skipping invalid segment: start >= end', { start: seg.start, end: seg.end, duration: Math.round((seg.end - seg.start) * 1000) / 1000 });
