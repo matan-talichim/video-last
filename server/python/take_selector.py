@@ -762,11 +762,12 @@ def main():
     if isinstance(words, dict):
         words = words.get("words", [])
 
-    # Filter to presenter words only
-    presenter_words = [w for w in words if w.get("is_presenter", True)]
-    presenter_words.sort(key=lambda w: w["start"])
+    # Use ALL words for pattern detection (n-gram continuity),
+    # but only mark presenter words for removal
+    all_words = sorted(words, key=lambda w: w["start"])
+    presenter_ids = {w["id"] for w in all_words if w.get("is_presenter", True)}
 
-    log(f"Analyzing {len(presenter_words)} presenter words...")
+    log(f"Analyzing {len(all_words)} total words ({len(presenter_ids)} presenter)...")
 
     # Load audio if available
     audio_data = None
@@ -782,32 +783,32 @@ def main():
     all_decisions = []
 
     # 1. Micro-stutters (4.3)
-    stutter_ids, stutter_decs = detect_micro_stutters(presenter_words)
+    stutter_ids, stutter_decs = detect_micro_stutters(all_words)
     all_remove_ids |= stutter_ids
     all_decisions.extend(stutter_decs)
     log(f"Micro-stutters: {len(stutter_decs)} groups, {len(stutter_ids)} words")
 
     # 2. Production cues (4.4)
-    cue_ids, cue_decs = detect_production_cues(presenter_words)
+    cue_ids, cue_decs = detect_production_cues(all_words)
     all_remove_ids |= cue_ids
     all_decisions.extend(cue_decs)
     log(f"Production cues: {len(cue_decs)} found, {len(cue_ids)} words")
 
     # 3. Full abandoned takes (4.5)
-    abandoned_ids, abandoned_decs = detect_full_abandoned_takes(presenter_words, all_remove_ids)
+    abandoned_ids, abandoned_decs = detect_full_abandoned_takes(all_words, all_remove_ids)
     all_remove_ids |= abandoned_ids
     all_decisions.extend(abandoned_decs)
     log(f"Abandoned takes: {len(abandoned_decs)} found, {len(abandoned_ids)} words")
 
     # 4. False starts (4.2)
-    false_start_ids, false_start_decs = detect_false_starts(presenter_words, all_remove_ids)
+    false_start_ids, false_start_decs = detect_false_starts(all_words, all_remove_ids)
     all_remove_ids |= false_start_ids
     all_decisions.extend(false_start_decs)
     log(f"False starts: {len(false_start_decs)} found, {len(false_start_ids)} words")
 
     # 5. Repetition detection (4.1)
     rep_ids, rep_decs = detect_repetitions(
-        presenter_words, all_remove_ids,
+        all_words, all_remove_ids,
         args.similarity_threshold, args.lookback_seconds,
     )
     all_remove_ids |= rep_ids
@@ -816,7 +817,7 @@ def main():
 
     # 6. Take scoring (4.6) — refine duplicate decisions
     all_decisions = apply_take_scoring(
-        all_decisions, presenter_words,
+        all_decisions, all_words,
         audio_data, sample_rate,
         args.scoring_override_margin,
     )
@@ -826,21 +827,30 @@ def main():
     for dec in all_decisions:
         all_remove_ids.update(dec["ids"])
 
+    # Filter: only remove presenter words (non-presenter already handled by merge)
+    non_presenter_filtered = all_remove_ids - presenter_ids
+    if non_presenter_filtered:
+        log(f"Filtered out {len(non_presenter_filtered)} non-presenter words from removal")
+        all_remove_ids &= presenter_ids
+
     pre_protection_groups = len(all_decisions)
     pre_protection_words = len(all_remove_ids)
     log(f"Before protections: {pre_protection_groups} groups ({pre_protection_words} words)")
 
     # 7. Coarticulation protection (CRITICAL rule 3)
     #    Only applies to individual word removals (stutters), NOT group removals
-    all_remove_ids, coart_restored = apply_coarticulation_protection(all_remove_ids, presenter_words, all_decisions)
+    all_remove_ids, coart_restored = apply_coarticulation_protection(all_remove_ids, all_words, all_decisions)
 
     # 8. Fragment protection
     #    Only applies to individual word removals, NOT group removals
-    all_remove_ids = apply_fragment_protection(all_remove_ids, presenter_words, all_decisions)
+    all_remove_ids = apply_fragment_protection(all_remove_ids, all_words, all_decisions)
 
     post_protection_words = len(all_remove_ids)
     restored_count = pre_protection_words - post_protection_words
     log(f"After protections: {pre_protection_groups} groups ({post_protection_words} words) — {restored_count} restored")
+
+    # Ensure only presenter words remain in remove_ids after protections
+    all_remove_ids &= presenter_ids
 
     # 9. Deduplicate and clean decisions (priority-based conflict resolution)
     all_decisions = deduplicate_decisions(all_decisions, all_remove_ids)
