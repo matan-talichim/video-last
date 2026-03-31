@@ -33,7 +33,7 @@ interface MergedTranscript {
   };
 }
 
-interface RemoveRange {
+interface KeepRange {
   ids: number[];
   reason: string;
 }
@@ -59,7 +59,7 @@ interface TakeDecisions {
 }
 
 interface AICleanResult {
-  remove_ranges: RemoveRange[];
+  keep_ranges: KeepRange[];
 }
 
 interface KeepSegment {
@@ -224,71 +224,49 @@ function buildNumberedText(words: Word[], takeSelectorIds?: Set<number>): string
   }).join(' ');
 }
 
-const CLEANUP_PROMPT = `You are cleaning a Hebrew video transcript for a marketing video editor.
-You receive numbered words. Most are spoken by the presenter.
-Words marked with asterisks (*) were flagged as suspected non-presenter speech
-(background voice, crew, assistant). USE THIS AS A HINT:
-- If a starred word is clearly an interruption or production instruction — REMOVE it.
-- If a starred word completes the presenter's sentence and makes grammatical sense —
-  it may be a false positive. KEEP it.
-- When in doubt about starred words — KEEP.
+const CLEANUP_PROMPT = `You are a professional video editor building a marketing video from raw footage.
 
-Words marked with tilde (~) were identified as duplicate takes, false starts,
-or production cues by automated rule-based analysis.
-You should CONFIRM their removal unless you see a clear reason to keep them.
+You receive ALL words from the transcript, numbered by ID. The presenter
+recorded multiple takes of the same script. Your job: BUILD THE BEST
+POSSIBLE VIDEO by selecting the strongest continuous segments.
 
-Your job: identify ONLY clear junk to remove. When in doubt — KEEP.
+INSTRUCTIONS:
 
-RULES:
+1. READ the entire transcript and understand the marketing message.
+   The typical structure is: Hook → Problem → Solution → Proof → CTA.
 
-1. DUPLICATE TAKES (CLEAR RETAKES ONLY):
-   A duplicate take is when the presenter STOPS mid-sentence, pauses, and
-   RESTARTS the same sentence from the beginning.
-   - Only mark as duplicate if the sentence clearly restarts (same opening 2-3 words).
-   - Keep the LAST (final) take — remove earlier abandoned attempts.
-   - Do NOT remove content that covers different aspects of the same topic.
-   - Do NOT remove a sentence just because it has similar words to another.
+2. For each part of the message, IDENTIFY ALL TAKES (versions) that
+   exist in the transcript. The presenter often said the same sentence
+   3-5 times.
 
-2. PRODUCTION INSTRUCTIONS:
-   Remove words that are clearly crew/director instructions, not part of the script.
-   Dictionary: "ממשיכים", "שוב", "טייק", "נתחיל", "עוד פעם", "מהתחלה",
-   "שוב מנקודה זו", "עוצר", "פסול", "סליחה", "שקט מצלמים",
-   "לא טוב", "אני עושה שוב", "בואו נעשה עוד אחד"
+3. For each part, SELECT THE BEST TAKE — the one that is:
+   - Most complete (full sentence, not cut off)
+   - Most fluent (no stuttering, no hesitation)
+   - Last take is usually best (presenter improved over time)
 
-3. LINE FEEDING:
-   If the producer whispers 2-4 words and then the presenter repeats
-   those exact words immediately after — remove the producer's whisper (first occurrence).
+4. Return ONLY the word IDs you want to KEEP, organized as continuous
+   segments. Each segment should be a complete thought/sentence.
 
-4. WHOLE TAKES ONLY (NO JUMP CUTS):
-   You are strictly forbidden from removing single words, partial sentences,
-   or mid-sentence fillers from a fluent take. If a sentence is good —
-   KEEP THE ENTIRE SENTENCE intact. ONLY remove:
-   - Complete failed attempts (presenter stopped and restarted)
-   - Complete duplicate sentences (same idea said twice)
-   - Complete abandoned takes (presenter said "let's try again")
-   Do NOT create jump cuts inside a fluent sentence.
+5. RULES:
+   - Never mix words from different takes into one sentence
+   - Each segment must be a continuous run of IDs (e.g., [90,91,92,93])
+   - Prefer longer, complete takes over short fragments
+   - Words marked with * are non-presenter — do not include them
+   - Words marked with ~ were flagged as duplicates — usually exclude them
+   - The final video should be 30-60 seconds for a service ad
+   - CRITICAL: List EVERY SINGLE ID in a chosen take. Do not skip numbers.
+     If the take spans ID 40 to 50, output [40,41,42,43,44,45,46,47,48,49,50].
+     Missing even one ID will cut a word from the video.
 
-5. TRUST THE TAKE SELECTOR:
-   Words marked with ~ were already identified as duplicates by automated
-   analysis. CONFIRM their removal — remove the earlier versions and keep
-   the FINAL version (highest IDs). Do not second-guess the system unless
-   you see an obvious error.
-
-6. GOLDEN RULE — WHEN IN DOUBT, KEEP:
-   - Better to include a slightly imperfect moment than to cut important content.
-   - If a sentence adds new information or a new angle — it is NOT a duplicate.
-   - If you're not 100% sure it's junk — KEEP IT.
-   - Your goal: clean transcript, not short transcript.
-
-Return JSON with remove_ranges only for items you are 100% certain are junk.
+RETURN FORMAT:
 {
-  "remove_ranges": [
-    { "ids": [48, 49, 50], "reason": "duplicate_take" },
-    { "ids": [72, 73, 74, 75], "reason": "production_instruction" }
+  "keep_ranges": [
+    { "ids": [12,13,14,15,16,17,18,19,20], "reason": "hook - best take" },
+    { "ids": [90,91,92,93,94,95,96,97], "reason": "solution - final take, most fluent" },
+    { "ids": [120,121,122,123,124], "reason": "proof - ROI guarantee" },
+    { "ids": [140,141,142,143], "reason": "CTA - clear call to action" }
   ]
 }
-
-If nothing to remove, return: { "remove_ranges": [] }
 
 Numbered text:
 `;
@@ -317,21 +295,21 @@ async function runSemanticCleanup(
     logger,
   });
 
-  // Ensure remove_ranges is an array
-  if (!Array.isArray(data.remove_ranges)) {
-    data.remove_ranges = [];
+  // Ensure keep_ranges is an array
+  if (!Array.isArray(data.keep_ranges)) {
+    data.keep_ranges = [];
   }
 
-  const totalRemoved = data.remove_ranges.reduce((sum, r) => sum + r.ids.length, 0);
+  const totalKept = data.keep_ranges.reduce((sum, r) => sum + r.ids.length, 0);
   const reasons: Record<string, number> = {};
-  for (const r of data.remove_ranges) {
+  for (const r of data.keep_ranges) {
     reasons[r.reason] = (reasons[r.reason] ?? 0) + r.ids.length;
   }
 
-  logger.info('Semantic cleanup completed', {
-    removeRanges: data.remove_ranges.length,
-    totalRemovedWords: totalRemoved,
-    removalReasons: reasons,
+  logger.info('AI selection completed', {
+    keepRanges: data.keep_ranges.length,
+    totalSelectedWords: totalKept,
+    selectionReasons: reasons,
   });
 
   return { cleanResult: data, usage };
@@ -341,7 +319,7 @@ async function runSemanticCleanup(
 
 function buildSegments(
   allWords: Word[],
-  removeRanges: RemoveRange[],
+  removeRanges: KeepRange[],
 ): { keepSegments: KeepSegment[]; removeSegments: RemoveSegment[] } {
   // Collect all IDs to remove
   const removeIdSet = new Set<number>();
@@ -458,14 +436,20 @@ export async function runMergeAndClean(
   // Step 2: Semantic cleanup via AI (with take selector hints)
   const { cleanResult, usage } = await runSemanticCleanup(jobDir, merged, brain, logger, takeSelectorIds);
 
-  // Merge remove ranges: take selector + AI
-  const allRemoveRanges: RemoveRange[] = [
-    ...takeDecisions.decisions.map((d) => ({ ids: d.ids, reason: d.reason })),
-    ...cleanResult.remove_ranges,
-  ];
+  // Build effective remove ranges from AI keep_ranges (invert: everything not kept is removed)
+  const keepIdSet = new Set(cleanResult.keep_ranges.flatMap(r => r.ids));
+  const effectiveRemoveRanges: KeepRange[] = [];
+  if (keepIdSet.size > 0) {
+    const notKeptIds = merged.words
+      .filter(w => !keepIdSet.has(w.id))
+      .map(w => w.id);
+    if (notKeptIds.length > 0) {
+      effectiveRemoveRanges.push({ ids: notKeptIds, reason: 'not_selected_by_ai' });
+    }
+  }
 
   // Step 3: Build keep/remove segments from word-level data
-  const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, allRemoveRanges);
+  const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, effectiveRemoveRanges);
 
   // Filter out invalid segments (start >= end) and micro-segments (< 0.8s)
   const MIN_KEEP_SEGMENT_DURATION = 0.8;
@@ -485,19 +469,8 @@ export async function runMergeAndClean(
   const processingTimeMs = Date.now() - startTime;
 
   // Count stats
-  const removeIdSet = new Set<number>();
-  for (const range of allRemoveRanges) {
-    for (const id of range.ids) {
-      removeIdSet.add(id);
-    }
-  }
-  const aiOnlyRemoveIds = new Set<number>();
-  for (const range of cleanResult.remove_ranges) {
-    for (const id of range.ids) {
-      aiOnlyRemoveIds.add(id);
-    }
-  }
-  const keptWords = merged.words.filter((w) => w.is_presenter && !removeIdSet.has(w.id));
+  const selectedByAI = keepIdSet.size;
+  const keptWords = merged.words.filter((w) => keepIdSet.has(w.id));
 
   // Build final output
   const cleanedTranscript = {
@@ -509,8 +482,8 @@ export async function runMergeAndClean(
       presenter_words: merged.stats.presenter_words,
       cleaned_words: keptWords.length,
       removed_by_merge: merged.stats.other_words,
-      removed_by_take_selector: takeSelectorIds.size,
-      removed_by_ai: aiOnlyRemoveIds.size,
+      selected_by_ai: selectedByAI,
+      take_selector_hints: takeSelectorIds.size,
       ai_brain: brain,
       ai_cost_usd: usage.estimatedCostUSD,
       processing_time_ms: processingTimeMs,
@@ -527,8 +500,8 @@ export async function runMergeAndClean(
     presenterWords: merged.stats.presenter_words,
     cleanedWords: keptWords.length,
     removedByMerge: merged.stats.other_words,
-    removedByTakeSelector: takeSelectorIds.size,
-    removedByAI: aiOnlyRemoveIds.size,
+    selectedByAI: selectedByAI,
+    takeSelectorHints: takeSelectorIds.size,
     keepSegments: keepSegments.length,
     removeSegments: removeSegments.length,
     brain,
@@ -555,8 +528,8 @@ export async function runMergeAndClean(
       presenterWords: merged.stats.presenter_words,
       cleanedWords: keptWords.length,
       removedByMerge: merged.stats.other_words,
-      removedByTakeSelector: takeSelectorIds.size,
-      removedByAI: aiOnlyRemoveIds.size,
+      selectedByAI: selectedByAI,
+      takeSelectorHints: takeSelectorIds.size,
       keepSegments: keepSegments.length,
       brain,
       outputPath,
