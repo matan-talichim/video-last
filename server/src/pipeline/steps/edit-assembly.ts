@@ -13,8 +13,15 @@ interface TranscriptKeepSegment {
   [key: string]: unknown;
 }
 
+interface TranscriptWord {
+  start: number;
+  end: number;
+  [key: string]: unknown;
+}
+
 interface CleanedTranscript {
   keep_segments: TranscriptKeepSegment[];
+  words?: TranscriptWord[];
   [key: string]: unknown;
 }
 
@@ -76,6 +83,43 @@ function mergeOverlapping(segments: KeepSegment[]): KeepSegment[] {
   return merged;
 }
 
+function getSmartEnd(segmentEnd: number, paddingEnd: number, allWords: TranscriptWord[]): number {
+  const rawEnd = segmentEnd + paddingEnd;
+
+  // Find any word that STARTS between segmentEnd and rawEnd
+  const nextWord = allWords.find(w =>
+    w.start > segmentEnd && w.start < rawEnd
+  );
+
+  if (nextWord) {
+    // Don't bleed into the next word — cut just before it
+    return Math.max(segmentEnd, nextWord.start - 0.02);
+  }
+
+  return rawEnd;
+}
+
+function getSmartStart(segmentStart: number, paddingStart: number, allWords: TranscriptWord[]): number {
+  const rawStart = segmentStart - paddingStart;
+
+  // Find the last word that ENDS between rawStart and segmentStart
+  let prevWord: TranscriptWord | undefined;
+  for (let i = allWords.length - 1; i >= 0; i--) {
+    const w = allWords[i]!;
+    if (w.end < segmentStart && w.end > rawStart) {
+      prevWord = w;
+      break;
+    }
+  }
+
+  if (prevWord) {
+    // Don't bleed into the previous word — cut just after it
+    return Math.min(segmentStart, prevWord.end + 0.02);
+  }
+
+  return rawStart;
+}
+
 // ── Main export ──────────────────────────────────
 
 export async function runEditAssembly(
@@ -128,6 +172,10 @@ export async function runEditAssembly(
     if (!cleanedTranscript.keep_segments?.length) {
       throw new Error('cleaned_transcript has no keep_segments');
     }
+
+    // Extract word-level timestamps for smart padding
+    const allWords: TranscriptWord[] = cleanedTranscript.words ?? [];
+    logger.info('Words loaded for smart padding', { wordCount: allWords.length });
 
     // Find original video file
     const originalFiles = ['original.mov', 'original.mp4', 'original.avi', 'original.mkv', 'original.webm'];
@@ -200,9 +248,9 @@ export async function runEditAssembly(
     for (let i = 0; i < validSegments.length; i++) {
       const seg = validSegments[i]!;
 
-      // Apply asymmetric padding
-      const actualStart = Math.max(0, seg.start - paddingStart);
-      const actualEnd = Math.min(videoDuration, seg.end + paddingEnd);
+      // Apply smart padding — avoid cutting into adjacent words
+      const actualStart = Math.max(0, getSmartStart(seg.start, paddingStart, allWords));
+      const actualEnd = Math.min(videoDuration, getSmartEnd(seg.end, paddingEnd, allWords));
       const segDuration = actualEnd - actualStart;
 
       const segmentFile = join(tempDir, `segment_${timestamp}_${String(i).padStart(3, '0')}.mp4`);
