@@ -251,20 +251,43 @@ INSTRUCTIONS:
    - Never mix words from different takes into one sentence
    - Each segment must be a continuous run of IDs (e.g., [90,91,92,93])
    - Prefer longer, complete takes over short fragments
-   - Words marked with * are non-presenter — do not include them
+   - Words marked with * are SUSPECTED non-presenter speech (background voice,
+     crew, assistant). Usually you should NOT include them.
+     HOWEVER — if a starred word clearly COMPLETES a presenter's sentence
+     (e.g., "מאחורי הקלעים התוצאה" needs "*היא* *פשוטה*" to make sense),
+     you SHOULD include it. The system sometimes incorrectly flags the
+     presenter's quiet words as non-presenter.
+
+     Rules for starred words:
+     - Starred word is isolated between long silences → EXCLUDE (likely crew)
+     - Starred word continues a presenter sentence seamlessly → INCLUDE (false positive)
+     - When in doubt and the word completes a sentence → INCLUDE
    - Words marked with ~ were flagged as duplicates — usually exclude them
    - The final video should be 30-60 seconds for a service ad
    - CRITICAL: List EVERY SINGLE ID in a chosen take. Do not skip numbers.
      If the take spans ID 40 to 50, output [40,41,42,43,44,45,46,47,48,49,50].
      Missing even one ID will cut a word from the video.
-   - INTERNAL RETAKES: Sometimes within a single take, the presenter starts
-     a sentence, stumbles, and restarts the same sentence WITHOUT a long pause.
-     If you see the same 3+ words appearing twice within a selected segment,
-     keep only the SECOND (later) occurrence. Start the segment from the
-     restart point, not from the failed first attempt.
-   - WATCH FOR STUTTERS: Inside your chosen take, make sure the presenter
-     didn't start a sentence, stop, and restart it immediately. If there is
-     a false start inside the take, exclude the failed words from your sequence.
+   - INTERNAL RETAKES — CRITICAL:
+     Sometimes the presenter says the same sentence TWICE within one continuous
+     section (without a long pause). You MUST detect this.
+
+     HOW TO DETECT: If you see the same 3+ word sequence appearing twice
+     in your selected IDs (e.g., "פרויקט חד פעמי" appears at IDs 66-68
+     AND again at IDs 82-84), you have an internal retake.
+
+     WHAT TO DO: Keep ONLY the LAST (highest ID) version. Start your segment
+     from the restart point. Never output a segment that contains duplicate phrases.
+
+     ALSO: If you see stutters like "לא לא" or "מחליף מחליף" (same word twice
+     in a row), keep only one occurrence.
+
+   - COMPLETE SENTENCES ONLY:
+     Every segment you output MUST be a grammatically complete thought.
+     - Do NOT start a segment mid-sentence (e.g., starting with "לך שהחיסכון...")
+     - Do NOT end a segment with a hanging word (e.g., ending with "...לא")
+     - If you can't find a complete version of a sentence, skip it entirely.
+       A shorter video with complete sentences is ALWAYS better than a longer
+       video with broken fragments.
 
 RETURN FORMAT:
 {
