@@ -224,6 +224,216 @@ function buildNumberedText(words: Word[], takeSelectorIds?: Set<number>): string
   }).join(' ');
 }
 
+function buildNumberedTextRaw(words: Word[]): string {
+  return words.map((w) => `[${w.id}] ${w.word}`).join(' ');
+}
+
+// ── AI Step 1: Narrative selection from ALL words ──
+
+const NARRATIVE_PROMPT = `You are a professional video editor. You receive a COMPLETE transcript of a raw video recording. The presenter recorded multiple takes of the same script.
+
+Your job: READ the entire transcript and BUILD the best possible marketing video by selecting the clearest, most fluent, and most complete version of each part of the message.
+
+STEP 1 — UNDERSTAND THE MESSAGE:
+Read everything and identify the core marketing structure:
+Hook → Problem → Solution → Proof → CTA
+
+STEP 2 — FOR EACH PART, FIND ALL TAKES:
+The presenter said each part of the script multiple times. Identify all versions.
+
+STEP 3 — SELECT THE BEST TAKE FOR EACH PART:
+Choose the version that is:
+- Most complete (full sentence, not cut off)
+- Most fluent (no stuttering, no hesitation)
+- Clearest words (well-articulated, confident delivery)
+- Last take is usually best (presenter improved over time)
+
+STEP 4 — VERIFY FLOW:
+Make sure your selected segments create a coherent, flowing video when played in sequence. The story should make sense from start to end.
+
+RULES:
+- Return ONLY continuous sequences of word IDs
+- Never mix words from different takes
+- Each segment must be a complete sentence
+- Minimum 4 words per segment
+- CRITICAL: List EVERY SINGLE ID — do not skip numbers
+- Ignore production instructions ("סליחה", "עוד פעם", "סיימתי", "יופי", "מעולה", "אוקיי")
+
+RETURN FORMAT:
+{
+  "keep_ranges": [
+    { "ids": [50,51,52,53,54,55], "reason": "hook - clearest take" },
+    ...
+  ]
+}
+
+Numbered text:
+`;
+
+interface FlaggedKeepRange extends KeepRange {
+  flagged: boolean;
+  presenterRatio: number;
+}
+
+interface AIFinalReviewResult {
+  keep_ranges: KeepRange[];
+}
+
+async function runAINarrativeSelection(
+  allWordsText: string,
+  brain: AIBrain,
+  logger: Logger,
+): Promise<{ narrativeRanges: KeepRange[]; usage: AIUsage }> {
+  const userPrompt = NARRATIVE_PROMPT + allWordsText;
+
+  const aiConfig = loadConfig();
+  const aiSettings = (aiConfig as unknown as Record<string, unknown>).ai as
+    { timeout?: number; maxTokens?: number } | undefined;
+
+  logger.info('AI Step 1: Selecting narrative from all words', { brain });
+
+  const { data, usage } = await askAIJSON<AICleanResult>(userPrompt, {
+    brain,
+    maxTokens: aiSettings?.maxTokens ?? 4096,
+    timeout: aiSettings?.timeout ?? 60000,
+    logger,
+  });
+
+  if (!Array.isArray(data.keep_ranges)) {
+    data.keep_ranges = [];
+  }
+
+  const totalKept = data.keep_ranges.reduce((sum, r) => sum + r.ids.length, 0);
+  logger.info('AI Step 1 completed', {
+    keepRanges: data.keep_ranges.length,
+    totalSelectedWords: totalKept,
+  });
+
+  return { narrativeRanges: data.keep_ranges, usage };
+}
+
+// ── Cross-reference with presenter detection ──
+
+function crossReferencePresenter(
+  ranges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+): FlaggedKeepRange[] {
+  const wordsMap = new Map<number, Word>();
+  for (const w of words) {
+    wordsMap.set(w.id, w);
+  }
+
+  const flaggedRanges: FlaggedKeepRange[] = ranges.map((range) => {
+    const presenterCount = range.ids.filter((id) => {
+      const word = wordsMap.get(id);
+      return word?.is_presenter === true;
+    }).length;
+
+    const presenterRatio = range.ids.length > 0 ? presenterCount / range.ids.length : 0;
+    const flagged = presenterRatio < 0.5;
+
+    if (flagged) {
+      logger.info('Flagged segment — likely non-presenter', {
+        ids: `${range.ids[0]}-${range.ids[range.ids.length - 1]}`,
+        presenterRatio: Math.round(presenterRatio * 100) / 100,
+        reason: range.reason,
+      });
+    }
+
+    return { ...range, flagged, presenterRatio };
+  });
+
+  const flaggedCount = flaggedRanges.filter((r) => r.flagged).length;
+  logger.info('Cross-reference completed', {
+    totalRanges: flaggedRanges.length,
+    flaggedRanges: flaggedCount,
+  });
+
+  return flaggedRanges;
+}
+
+// ── AI Step 2: Final review of flagged segments ──
+
+function buildFinalReviewPrompt(flaggedRanges: FlaggedKeepRange[], allWordsText: string): string {
+  const flaggedDescriptions = flaggedRanges
+    .filter((r) => r.flagged)
+    .map((r) => `- Segment (IDs ${r.ids[0]}-${r.ids[r.ids.length - 1]}): presenterRatio=${Math.round(r.presenterRatio * 100) / 100} — "${r.reason}"`)
+    .join('\n');
+
+  return `You selected these segments for the final video. Some segments were flagged because less than 50% of their words match the presenter's voice (they may be the production assistant reading the same script).
+
+FLAGGED SEGMENTS:
+${flaggedDescriptions}
+
+ALL SELECTED SEGMENTS:
+${JSON.stringify(flaggedRanges.map((r) => ({ ids: r.ids, reason: r.reason, flagged: r.flagged, presenterRatio: Math.round(r.presenterRatio * 100) / 100 })), null, 2)}
+
+For each flagged segment:
+1. Is there another take of the same sentence that IS the presenter? → swap it (use IDs from the transcript below)
+2. If no presenter version exists → remove the segment entirely
+
+Return your FINAL keep_ranges after corrections.
+
+RETURN FORMAT:
+{
+  "keep_ranges": [
+    { "ids": [50,51,52,53,54,55], "reason": "hook - clearest take" },
+    ...
+  ]
+}
+
+Full transcript for reference:
+${allWordsText}`;
+}
+
+async function runAIFinalReview(
+  flaggedRanges: FlaggedKeepRange[],
+  allWordsText: string,
+  brain: AIBrain,
+  logger: Logger,
+): Promise<{ finalRanges: KeepRange[]; usage: AIUsage }> {
+  const hasFlagged = flaggedRanges.some((r) => r.flagged);
+
+  if (!hasFlagged) {
+    logger.info('AI Step 2: No flagged segments, skipping final review');
+    const cleanRanges = flaggedRanges.map(({ ids, reason }) => ({ ids, reason }));
+    return { finalRanges: cleanRanges, usage: { inputTokens: 0, outputTokens: 0, estimatedCostUSD: 0 } };
+  }
+
+  const userPrompt = buildFinalReviewPrompt(flaggedRanges, allWordsText);
+
+  const aiConfig = loadConfig();
+  const aiSettings = (aiConfig as unknown as Record<string, unknown>).ai as
+    { timeout?: number; maxTokens?: number } | undefined;
+
+  logger.info('AI Step 2: Final review of flagged segments', {
+    brain,
+    flaggedCount: flaggedRanges.filter((r) => r.flagged).length,
+  });
+
+  const { data, usage } = await askAIJSON<AIFinalReviewResult>(userPrompt, {
+    brain,
+    maxTokens: aiSettings?.maxTokens ?? 4096,
+    timeout: aiSettings?.timeout ?? 60000,
+    logger,
+  });
+
+  if (!Array.isArray(data.keep_ranges)) {
+    data.keep_ranges = [];
+  }
+
+  const totalKept = data.keep_ranges.reduce((sum, r) => sum + r.ids.length, 0);
+  logger.info('AI Step 2 completed', {
+    keepRanges: data.keep_ranges.length,
+    totalSelectedWords: totalKept,
+  });
+
+  return { finalRanges: data.keep_ranges, usage };
+}
+
+// ── Legacy: Semantic cleanup (single AI call) ──
+
 const CLEANUP_PROMPT = `You are a professional video editor building a marketing video from raw footage.
 
 You receive ALL words from the transcript, numbered by ID. The presenter
@@ -512,15 +722,29 @@ export async function runMergeAndClean(
   // Step 1: Merge
   const merged = await runMerge(jobDir, logger);
 
-  // Step 1.5: Take selector (rule-based duplicate detection)
+  // Step 1.5: Take selector (rule-based duplicate detection — metadata/hints)
   const takeDecisions = await runTakeSelector(jobDir, logger);
   const takeSelectorIds = new Set(takeDecisions.remove_ids);
 
-  // Step 2: Semantic cleanup via AI (with take selector hints)
-  const { cleanResult, usage } = await runSemanticCleanup(jobDir, merged, brain, logger, takeSelectorIds);
+  // Step 2: AI Step 1 — Select narrative from ALL words (no markers)
+  const allWordsText = buildNumberedTextRaw(merged.words);
+  const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, brain, logger);
+
+  // Step 3: Cross-reference with presenter detection
+  const flaggedRanges = crossReferencePresenter(narrativeRanges, merged.words, logger);
+
+  // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
+  const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
+
+  // Combine usage from both AI calls
+  const usage: AIUsage = {
+    inputTokens: usage1.inputTokens + usage2.inputTokens,
+    outputTokens: usage1.outputTokens + usage2.outputTokens,
+    estimatedCostUSD: usage1.estimatedCostUSD + usage2.estimatedCostUSD,
+  };
 
   // Build effective remove ranges from AI keep_ranges (invert: everything not kept is removed)
-  const keepIdSet = new Set(cleanResult.keep_ranges.flatMap(r => r.ids));
+  const keepIdSet = new Set(finalRanges.flatMap(r => r.ids));
   const effectiveRemoveRanges: KeepRange[] = [];
   if (keepIdSet.size > 0) {
     const notKeptIds = merged.words
@@ -531,7 +755,7 @@ export async function runMergeAndClean(
     }
   }
 
-  // Step 3: Build keep/remove segments from word-level data
+  // Step 5: Build keep/remove segments from word-level data
   const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, effectiveRemoveRanges);
 
   // Filter out invalid segments (start >= end) and micro-segments (< 0.8s)
@@ -554,6 +778,8 @@ export async function runMergeAndClean(
   // Count stats
   const selectedByAI = keepIdSet.size;
   const keptWords = merged.words.filter((w) => keepIdSet.has(w.id));
+  const flaggedSegmentCount = flaggedRanges.filter((r) => r.flagged).length;
+  const aiCalls = usage2.inputTokens > 0 ? 2 : 1;
 
   // Build final output
   const cleanedTranscript = {
@@ -567,6 +793,8 @@ export async function runMergeAndClean(
       removed_by_merge: merged.stats.other_words,
       selected_by_ai: selectedByAI,
       take_selector_hints: takeSelectorIds.size,
+      flagged_segments: flaggedSegmentCount,
+      ai_calls: aiCalls,
       ai_brain: brain,
       ai_cost_usd: usage.estimatedCostUSD,
       processing_time_ms: processingTimeMs,
@@ -585,6 +813,8 @@ export async function runMergeAndClean(
     removedByMerge: merged.stats.other_words,
     selectedByAI: selectedByAI,
     takeSelectorHints: takeSelectorIds.size,
+    flaggedSegments: flaggedSegmentCount,
+    aiCalls,
     keepSegments: keepSegments.length,
     removeSegments: removeSegments.length,
     brain,
@@ -613,12 +843,14 @@ export async function runMergeAndClean(
       removedByMerge: merged.stats.other_words,
       selectedByAI: selectedByAI,
       takeSelectorHints: takeSelectorIds.size,
+      flaggedSegments: flaggedSegmentCount,
+      aiCalls,
       keepSegments: keepSegments.length,
       brain,
       outputPath,
     },
     aiCosts: {
-      totalCalls: (existingCosts.totalCalls ?? 0) + 1,
+      totalCalls: (existingCosts.totalCalls ?? 0) + aiCalls,
       totalInputTokens: (existingCosts.totalInputTokens ?? 0) + usage.inputTokens,
       totalOutputTokens: (existingCosts.totalOutputTokens ?? 0) + usage.outputTokens,
       estimatedCostUSD: Number(((existingCosts.estimatedCostUSD ?? 0) + usage.estimatedCostUSD).toFixed(4)),
