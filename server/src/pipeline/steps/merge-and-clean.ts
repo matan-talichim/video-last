@@ -257,7 +257,22 @@ RULES:
    If the producer whispers 2-4 words and then the presenter repeats
    those exact words immediately after — remove the producer's whisper (first occurrence).
 
-4. GOLDEN RULE — WHEN IN DOUBT, KEEP:
+4. WHOLE TAKES ONLY (NO JUMP CUTS):
+   You are strictly forbidden from removing single words, partial sentences,
+   or mid-sentence fillers from a fluent take. If a sentence is good —
+   KEEP THE ENTIRE SENTENCE intact. ONLY remove:
+   - Complete failed attempts (presenter stopped and restarted)
+   - Complete duplicate sentences (same idea said twice)
+   - Complete abandoned takes (presenter said "let's try again")
+   Do NOT create jump cuts inside a fluent sentence.
+
+5. TRUST THE TAKE SELECTOR:
+   Words marked with ~ were already identified as duplicates by automated
+   analysis. CONFIRM their removal — remove the earlier versions and keep
+   the FINAL version (highest IDs). Do not second-guess the system unless
+   you see an obvious error.
+
+6. GOLDEN RULE — WHEN IN DOUBT, KEEP:
    - Better to include a slightly imperfect moment than to cut important content.
    - If a sentence adds new information or a new angle — it is NOT a duplicate.
    - If you're not 100% sure it's junk — KEEP IT.
