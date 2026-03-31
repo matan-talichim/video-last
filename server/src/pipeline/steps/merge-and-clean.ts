@@ -285,6 +285,20 @@ INSTRUCTIONS:
        A shorter video with complete sentences is ALWAYS better than a longer
        video with broken fragments.
 
+   - MINIMUM SEGMENT LENGTH: Each segment you select should be at least
+     4 words and approximately 2+ seconds long. If a segment would be
+     shorter than this, it's probably a fragment — either find a longer
+     version of that sentence elsewhere in the transcript, or skip it entirely.
+     A video with 6 strong segments is better than 9 segments with 3 fragments.
+
+   - DO NOT SPLIT SENTENCES: If a sentence like "ואם אני לא מראה לך
+     שהחיסכון החודשי הוא גדול מעלות המערכת" is broken by starred words
+     in the middle, do NOT output it as two separate segments. Either:
+     (a) Find a complete unbroken version of that sentence elsewhere, OR
+     (b) Output ONE segment with all the IDs including the gap, OR
+     (c) Skip the sentence entirely.
+     Two fragments of the same sentence is NEVER acceptable.
+
 RETURN FORMAT:
 {
   "keep_ranges": [
@@ -479,7 +493,7 @@ export async function runMergeAndClean(
   const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, effectiveRemoveRanges);
 
   // Filter out invalid segments (start >= end) and micro-segments (< 0.8s)
-  const MIN_KEEP_SEGMENT_DURATION = 0.8;
+  const MIN_KEEP_SEGMENT_DURATION = 1.5;
   const keepSegments = rawKeepSegments.filter((seg) => {
     if (seg.start >= seg.end) {
       logger.warn('Skipping invalid segment: start >= end', { start: seg.start, end: seg.end, duration: Math.round((seg.end - seg.start) * 1000) / 1000 });
