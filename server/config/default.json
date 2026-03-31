@@ -61,7 +61,7 @@
   },
   "editAssembly": {
     "paddingStart": 0.03,
-    "paddingEnd": 0.15,
+    "paddingEnd": 0.25,
     "fadeDuration": 0.03,
     "crf": 18,
     "preset": "medium",

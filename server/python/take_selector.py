@@ -331,7 +331,7 @@ def detect_false_starts(presenter_words, already_removed):
     decisions = []
     remove_ids = set()
 
-    # Split into sentences by gaps > 600ms
+    # Split into sentences by gaps > 1500ms
     sentences = []
     current = []
     for i, w in enumerate(presenter_words):
@@ -339,7 +339,7 @@ def detect_false_starts(presenter_words, already_removed):
             continue
         if current:
             gap_ms = (w["start"] - current[-1]["end"]) * 1000.0
-            if gap_ms > 600:
+            if gap_ms > 1500:
                 sentences.append(current)
                 current = [w]
             else:
@@ -353,7 +353,7 @@ def detect_false_starts(presenter_words, already_removed):
         sent = sentences[i]
         next_sent = sentences[i + 1]
 
-        if len(sent) >= 4:
+        if len(sent) >= 6:
             continue
 
         # Check no punctuation at end
@@ -363,7 +363,7 @@ def detect_false_starts(presenter_words, already_removed):
 
         # Check gap after
         gap_ms = (next_sent[0]["start"] - sent[-1]["end"]) * 1000.0
-        if gap_ms < 600:
+        if gap_ms < 1500:
             continue
 
         # Check first 2 words match
