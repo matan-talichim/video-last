@@ -427,6 +427,7 @@ def main() -> None:
             "total_speech_duration": 0.0,
             "total_video_duration": round(video_duration, 3),
             "speech_ratio": 0.0,
+            "vad_fallback": False,
             "processing_time_ms": round((time.time() - start_time) * 1000),
         }
         output_json = json.dumps(result, ensure_ascii=False, indent=2)
@@ -437,6 +438,7 @@ def main() -> None:
     # Step 2: Lip motion detection
     log("=== Step 2: Lip Motion Detection ===")
     face_detection_failed = False
+    vad_fallback_triggered = False
     try:
         segments_with_confidence = run_lip_detection(
             args.video, vad_segments, args.lip_threshold
@@ -445,6 +447,7 @@ def main() -> None:
         log_error(str(e))
         log("Falling back to VAD-only segments (no face model)")
         face_detection_failed = True
+        vad_fallback_triggered = True
         segments_with_confidence = [
             {"start": s["start"], "end": s["end"], "confidence": 1.0}
             for s in vad_segments
@@ -453,6 +456,7 @@ def main() -> None:
         log_error(f"Lip detection failed: {e}")
         log("Falling back to VAD-only segments")
         face_detection_failed = True
+        vad_fallback_triggered = True
         segments_with_confidence = [
             {"start": s["start"], "end": s["end"], "confidence": 1.0}
             for s in vad_segments
@@ -495,6 +499,7 @@ def main() -> None:
     # VAD-only fallback: if lip detection filtered too aggressively
     if speech_ratio < 0.15 and video_duration > 30 and not face_detection_failed:
         log(f"Low speech ratio ({speech_ratio:.2f}), falling back to VAD-only mode")
+        vad_fallback_triggered = True
 
         # Re-build segments from original VAD output (before lip filtering)
         vad_only_segments = [
@@ -525,6 +530,7 @@ def main() -> None:
         "total_speech_duration": round(total_speech, 3),
         "total_video_duration": round(video_duration, 3),
         "speech_ratio": round(speech_ratio, 3),
+        "vad_fallback": vad_fallback_triggered,
         "processing_time_ms": processing_time_ms,
     }
 
