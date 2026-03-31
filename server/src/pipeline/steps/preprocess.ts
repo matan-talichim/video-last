@@ -113,7 +113,7 @@ export async function runPreprocess(
         const thresholdDb = audioScrubConfig.thresholdDb;
         const gateArgs = [
           '-i', audioPath,
-          '-af', `agate=threshold=${thresholdDb}dB:ratio=20:attack=10:release=250`,
+          '-af', `agate=threshold=${thresholdDb}dB:ratio=4:attack=5:release=400`,
           gatedPath,
         ];
         logger.info('Preprocess: applying noise gate', {
