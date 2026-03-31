@@ -5,6 +5,27 @@ Take Selector — Rule-based duplicate take detection (Agent 2).
 Identifies duplicate takes, false starts, production cues, micro-stutters,
 and abandoned takes using deterministic rules (no AI).
 
+RULE PRIORITY (when rules conflict):
+
+  CRITICAL — never override:
+    1. Production Cues → always remove (+ 1000ms tail)
+    2. Full Abandoned Take → always remove entire section
+    3. Coarticulation (gap < 20ms) → NEVER cut
+
+  IMPORTANT — apply unless conflicts with CRITICAL:
+    4. Repetition (cosine > 0.85) → remove first, keep last
+    5. False Start (< 4 words + restart) → remove
+    6. Micro-stutter → keep last occurrence only
+
+  QUALITY — apply after CRITICAL and IMPORTANT:
+    7. Take Scoring → override "last wins" only if earlier scores 20%+ higher
+    8. Flawless Run → if nothing to remove, return all words as keep
+
+CONFLICT RESOLUTION:
+  - If a word is marked by both Production Cue AND Repetition → Production Cue wins
+  - If Take Scoring contradicts Last Take Wins → Last Take Wins unless score gap > 20%
+  - If removal would leave < 3 words in a segment → don't remove (fragment protection)
+
 CLI:
     python3 take_selector.py \
         --words merged_transcript.json \
@@ -50,6 +71,8 @@ SIMILARITY_THRESHOLD = 0.85
 LOOKBACK_SECONDS = 15.0
 SCORING_OVERRIDE_MARGIN = 0.20
 TARGET_WPS = 2.7
+COARTICULATION_GAP_MS = 20.0
+MIN_SEGMENT_WORDS = 3
 
 
 # ── CLI ──────────────────────────────────────────────
@@ -568,6 +591,133 @@ def apply_take_scoring(decisions, presenter_words, audio_data, sample_rate, over
     return updated_decisions
 
 
+# ── Priority & Protection ────────────────────────────
+
+def apply_coarticulation_protection(remove_ids, presenter_words):
+    """
+    CRITICAL rule 3: If gap between two consecutive words < 20ms,
+    they are coarticulated — NEVER cut between them.
+    If one is marked for removal and the other isn't, restore the marked one.
+    """
+    restored = set()
+    for i in range(len(presenter_words) - 1):
+        curr = presenter_words[i]
+        nxt = presenter_words[i + 1]
+        gap_ms = (nxt["start"] - curr["end"]) * 1000.0
+
+        if gap_ms < COARTICULATION_GAP_MS:
+            curr_removed = curr["id"] in remove_ids
+            nxt_removed = nxt["id"] in remove_ids
+            # If only one of the pair is removed → restore it (don't cut)
+            if curr_removed and not nxt_removed:
+                restored.add(curr["id"])
+            elif nxt_removed and not curr_removed:
+                restored.add(nxt["id"])
+
+    if restored:
+        remove_ids -= restored
+        log(f"Coarticulation protection: restored {len(restored)} words (gap < {COARTICULATION_GAP_MS}ms)")
+
+    return remove_ids, restored
+
+
+def apply_fragment_protection(remove_ids, presenter_words):
+    """
+    If removal would leave < MIN_SEGMENT_WORDS in a segment, don't remove.
+    Segments are groups of consecutive kept words (gap < 600ms).
+    """
+    # Build segments of remaining words
+    remaining = [w for w in presenter_words if w["id"] not in remove_ids]
+    if not remaining:
+        return remove_ids
+
+    segments = []
+    current_seg = [remaining[0]]
+    for i in range(1, len(remaining)):
+        gap_ms = (remaining[i]["start"] - current_seg[-1]["end"]) * 1000.0
+        if gap_ms > 600:
+            segments.append(current_seg)
+            current_seg = [remaining[i]]
+        else:
+            current_seg.append(remaining[i])
+    segments.append(current_seg)
+
+    # Check each segment
+    restored = set()
+    for seg in segments:
+        if len(seg) < MIN_SEGMENT_WORDS:
+            # This segment is too small — find which removals border it
+            seg_start = seg[0]["start"]
+            seg_end = seg[-1]["end"]
+            # Find removed words adjacent to this segment
+            for w in presenter_words:
+                if w["id"] not in remove_ids:
+                    continue
+                # Word is within 600ms of segment boundaries
+                if (seg_start - 0.6) <= w["start"] <= (seg_end + 0.6):
+                    restored.add(w["id"])
+
+    if restored:
+        remove_ids -= restored
+        log(f"Fragment protection: restored {len(restored)} words (segments < {MIN_SEGMENT_WORDS} words)")
+
+    return remove_ids
+
+
+def deduplicate_decisions(decisions, remove_ids):
+    """
+    Clean up decisions: remove IDs that were restored by protections,
+    and ensure production_cue reason wins over others for shared IDs.
+    """
+    # Build priority map: word_id → highest priority reason
+    # Priority: production_cue > abandoned_take > duplicate_take > false_start > stutter
+    priority = {
+        "production_cue": 5,
+        "abandoned_take": 4,
+        "duplicate_take": 3,
+        "false_start": 2,
+        "stutter": 1,
+    }
+
+    word_reason = {}
+    for dec in decisions:
+        for wid in dec["ids"]:
+            if wid not in remove_ids:
+                continue
+            existing_priority = priority.get(word_reason.get(wid, ""), 0)
+            new_priority = priority.get(dec["reason"], 0)
+            if new_priority > existing_priority:
+                word_reason[wid] = dec["reason"]
+
+    # Rebuild decisions grouped by reason
+    reason_groups = {}
+    for wid, reason in word_reason.items():
+        if reason not in reason_groups:
+            reason_groups[reason] = []
+        reason_groups[reason].append(wid)
+
+    # Find kept_ids from original decisions
+    kept_map = {}
+    for dec in decisions:
+        if "kept_ids" in dec:
+            for wid in dec["ids"]:
+                if wid in remove_ids:
+                    kept_map[wid] = dec["kept_ids"]
+
+    cleaned = []
+    for reason, ids in reason_groups.items():
+        ids.sort()
+        entry = {"ids": ids, "reason": reason}
+        # Attach kept_ids from first matching decision
+        for wid in ids:
+            if wid in kept_map:
+                entry["kept_ids"] = kept_map[wid]
+                break
+        cleaned.append(entry)
+
+    return cleaned
+
+
 # ── Logging ──────────────────────────────────────────
 
 def log(msg):
@@ -651,6 +801,15 @@ def main():
     all_remove_ids = set()
     for dec in all_decisions:
         all_remove_ids.update(dec["ids"])
+
+    # 7. Coarticulation protection (CRITICAL rule 3)
+    all_remove_ids, coart_restored = apply_coarticulation_protection(all_remove_ids, presenter_words)
+
+    # 8. Fragment protection
+    all_remove_ids = apply_fragment_protection(all_remove_ids, presenter_words)
+
+    # 9. Deduplicate and clean decisions (priority-based conflict resolution)
+    all_decisions = deduplicate_decisions(all_decisions, all_remove_ids)
 
     # Stats
     reason_counts = {}
