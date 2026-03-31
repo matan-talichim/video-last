@@ -68,6 +68,12 @@
     "audioBitrate": "192k",
     "minSegmentDuration": 0.1
   },
+  "takeSelector": {
+    "enabled": true,
+    "similarityThreshold": 0.85,
+    "lookbackSeconds": 15,
+    "scoringOverrideMargin": 0.20
+  },
   "audioScrub": {
     "enabled": true,
     "thresholdDb": -32
