@@ -251,13 +251,7 @@ INSTRUCTIONS:
    - Never mix words from different takes into one sentence
    - Each segment must be a continuous run of IDs (e.g., [90,91,92,93])
    - Prefer longer, complete takes over short fragments
-   - Words marked with * are non-presenter speech (background voice, crew,
-     production assistant). Do NOT include them in your keep_ranges.
-     The ONLY exception: if a single starred word (not a sequence of 2+ starred
-     words) appears between two presenter words and is clearly the same speaker
-     continuing the same sentence, you may include it.
-     If you see 2 or more consecutive starred words — they are definitely
-     non-presenter. NEVER include a sequence of starred words.
+   - {{STARRED_WORDS_RULE}}
    - Words marked with ~ were flagged as duplicates — usually exclude them
    - The final video should be 30-60 seconds for a service ad
    - CRITICAL: List EVERY SINGLE ID in a chosen take. Do not skip numbers.
@@ -325,6 +319,36 @@ RETURN FORMAT:
 Numbered text:
 `;
 
+function getStarredWordsRule(vadFallback: boolean): string {
+  if (vadFallback) {
+    return `Words marked with * were flagged by automated voice analysis, but since
+     this video has a non-standard camera angle, these flags are UNRELIABLE.
+     Treat starred words as REGULAR presenter words — include them freely
+     when they form part of a sentence. Only exclude starred words if they
+     are clearly production instructions ("סיימתי", "יופי", "מעולה").`;
+  }
+  return `Words marked with * are non-presenter speech (background voice, crew,
+     production assistant). Do NOT include them in your keep_ranges.
+     The ONLY exception: if a single starred word (not a sequence of 2+ starred
+     words) appears between two presenter words and is clearly the same speaker
+     continuing the same sentence, you may include it.
+     If you see 2 or more consecutive starred words — they are definitely
+     non-presenter. NEVER include a sequence of starred words.`;
+}
+
+function readVadFallback(jobDir: string): boolean {
+  const segmentsPath = join(jobDir, 'presenter_segments.json');
+  if (!existsSync(segmentsPath)) {
+    return false;
+  }
+  try {
+    const data = JSON.parse(readFileSync(segmentsPath, 'utf-8')) as { vad_fallback?: boolean };
+    return data.vad_fallback === true;
+  } catch {
+    return false;
+  }
+}
+
 async function runSemanticCleanup(
   jobDir: string,
   merged: MergedTranscript,
@@ -332,8 +356,13 @@ async function runSemanticCleanup(
   logger: Logger,
   takeSelectorIds?: Set<number>,
 ): Promise<{ cleanResult: AICleanResult; usage: AIUsage }> {
+  const vadFallback = readVadFallback(jobDir);
+  if (vadFallback) {
+    logger.info('VAD fallback detected — using relaxed starred words rule');
+  }
+  const prompt = CLEANUP_PROMPT.replace('{{STARRED_WORDS_RULE}}', getStarredWordsRule(vadFallback));
   const numberedText = buildNumberedText(merged.words, takeSelectorIds);
-  const userPrompt = CLEANUP_PROMPT + numberedText;
+  const userPrompt = prompt + numberedText;
 
   const aiConfig = loadConfig();
   const aiSettings = (aiConfig as unknown as Record<string, unknown>).ai as
