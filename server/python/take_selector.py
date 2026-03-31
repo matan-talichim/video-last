@@ -382,107 +382,123 @@ def detect_false_starts(presenter_words, already_removed):
     return remove_ids, decisions
 
 
+def build_takes(words, already_removed, gap_threshold=0.5):
+    """
+    Group active words into complete takes based on silence gaps.
+    A gap > gap_threshold (seconds) between consecutive words = take boundary.
+    Returns list of takes, each take is a list of word dicts.
+    """
+    active = [w for w in words if w["id"] not in already_removed]
+    if not active:
+        return []
+
+    takes = []
+    current_take = [active[0]]
+
+    for i in range(1, len(active)):
+        gap = active[i]["start"] - current_take[-1]["end"]
+        if gap > gap_threshold:
+            takes.append(current_take)
+            current_take = [active[i]]
+        else:
+            current_take.append(active[i])
+
+    if current_take:
+        takes.append(current_take)
+
+    return takes
+
+
+def find_similar_take_groups(takes, threshold, lookback_sec):
+    """
+    Compare all take pairs within lookback window using cosine BoW.
+    Group similar takes (similarity >= threshold) using greedy chaining.
+    Returns list of groups, each group is a list of take indices.
+    """
+    n = len(takes)
+    # Build adjacency: which takes are similar to each other
+    adjacency = {i: set() for i in range(n)}
+
+    for i in range(n):
+        text_i = [w["word"].strip() for w in takes[i]]
+        start_i = takes[i][0]["start"]
+        end_i = takes[i][-1]["end"]
+
+        for j in range(i + 1, n):
+            start_j = takes[j][0]["start"]
+            # Check lookback window
+            if start_j - end_i > lookback_sec:
+                break
+
+            text_j = [w["word"].strip() for w in takes[j]]
+            sim = cosine_similarity_bow(text_i, text_j)
+            if sim >= threshold:
+                adjacency[i].add(j)
+                adjacency[j].add(i)
+
+    # Greedy connected-component grouping
+    visited = set()
+    groups = []
+
+    for i in range(n):
+        if i in visited or not adjacency[i]:
+            continue
+        # BFS to find connected component
+        group = []
+        queue = [i]
+        while queue:
+            node = queue.pop(0)
+            if node in visited:
+                continue
+            visited.add(node)
+            group.append(node)
+            for neighbor in adjacency[node]:
+                if neighbor not in visited:
+                    queue.append(neighbor)
+        if len(group) >= 2:
+            groups.append(sorted(group))
+
+    return groups
+
+
 def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec):
     """
-    Section 4.1: Sliding window 3-gram comparison.
-    Cosine > threshold within lookback window.
-    First occurrence = duplicate (remove), last = keep.
+    Section 4.1: Complete-take repetition detection.
+    Groups words into takes (by silence > 500ms), compares whole takes
+    using cosine similarity, and removes all but the last take in each
+    similar group. Never removes individual words from within a take.
     """
     decisions = []
     remove_ids = set()
 
-    # Filter to active words
-    active = [w for w in presenter_words if w["id"] not in already_removed]
+    # Step 1: Build takes from active words
+    takes = build_takes(presenter_words, already_removed)
+    log(f"Repetition detection: {len(takes)} takes identified")
 
-    if len(active) < 3:
+    if len(takes) < 2:
         return remove_ids, decisions
 
-    # Build 3-grams with their word objects
-    grams = []
-    for i in range(len(active) - 2):
-        gram_words = active[i:i + 3]
-        gram_text = [w["word"].strip() for w in gram_words]
-        grams.append({
-            "text": gram_text,
-            "words": gram_words,
-            "start": gram_words[0]["start"],
-            "end": gram_words[-1]["end"],
-            "ids": [w["id"] for w in gram_words],
-        })
+    # Step 2: Find groups of similar takes
+    groups = find_similar_take_groups(takes, threshold, lookback_sec)
+    log(f"Repetition detection: {len(groups)} similar-take groups found")
 
-    # Track which grams are part of duplicate groups
-    # group_id → list of gram indices
-    duplicate_groups = []
-    matched = set()
+    # Step 3: For each group, keep last take, remove the rest
+    for group in groups:
+        # Sort by start time — last take wins
+        group_takes = [(idx, takes[idx]) for idx in group]
+        group_takes.sort(key=lambda t: t[1][0]["start"])
 
-    for i in range(len(grams)):
-        if i in matched:
-            continue
+        kept_take = group_takes[-1][1]
+        kept_ids = sorted([w["id"] for w in kept_take])
 
-        group = [i]
-        for j in range(i + 1, len(grams)):
-            if j in matched:
-                continue
-
-            # Check time window
-            time_diff = grams[j]["start"] - grams[i]["end"]
-            if time_diff > lookback_sec:
-                break
-            if time_diff < 0:
-                continue
-
-            sim = cosine_similarity_bow(grams[i]["text"], grams[j]["text"])
-            if sim >= threshold:
-                group.append(j)
-                matched.add(j)
-
-        if len(group) >= 2:
-            matched.add(i)
-            duplicate_groups.append(group)
-
-    # For each group: expand grams into full take regions, keep last
-    for group in duplicate_groups:
-        # Collect all word IDs per take
-        takes = []
-        for gram_idx in group:
-            gram = grams[gram_idx]
-            takes.append({
-                "ids": set(gram["ids"]),
-                "words": list(gram["words"]),
-                "start": gram["start"],
-                "end": gram["end"],
+        for idx, take in group_takes[:-1]:
+            ids = sorted([w["id"] for w in take])
+            remove_ids.update(ids)
+            decisions.append({
+                "ids": ids,
+                "reason": "duplicate_take",
+                "kept_ids": kept_ids,
             })
-
-        # Merge overlapping takes
-        merged_takes = []
-        for take in takes:
-            merged = False
-            for mt in merged_takes:
-                if take["ids"] & mt["ids"]:
-                    mt["ids"] |= take["ids"]
-                    mt["words"] = list({w["id"]: w for w in mt["words"] + take["words"]}.values())
-                    mt["start"] = min(mt["start"], take["start"])
-                    mt["end"] = max(mt["end"], take["end"])
-                    merged = True
-                    break
-            if not merged:
-                merged_takes.append(take)
-
-        if len(merged_takes) < 2:
-            continue
-
-        # Sort by time — last wins
-        merged_takes.sort(key=lambda t: t["start"])
-        kept = merged_takes[-1]
-        for earlier in merged_takes[:-1]:
-            ids = sorted(earlier["ids"] - kept["ids"] - already_removed)
-            if ids:
-                remove_ids.update(ids)
-                decisions.append({
-                    "ids": ids,
-                    "reason": "duplicate_take",
-                    "kept_ids": sorted(kept["ids"]),
-                })
 
     return remove_ids, decisions
 
