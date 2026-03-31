@@ -492,6 +492,26 @@ def main() -> None:
     total_speech = sum(s["end"] - s["start"] for s in final_segments)
     speech_ratio = total_speech / video_duration if video_duration > 0 else 0.0
 
+    # VAD-only fallback: if lip detection filtered too aggressively
+    if speech_ratio < 0.15 and video_duration > 30 and not face_detection_failed:
+        log(f"Low speech ratio ({speech_ratio:.2f}), falling back to VAD-only mode")
+
+        # Re-build segments from original VAD output (before lip filtering)
+        vad_only_segments = [
+            {"start": s["start"], "end": s["end"], "confidence": 0.5}
+            for s in vad_segments
+        ]
+
+        # Apply same merge/filter logic
+        final_segments = merge_segments(vad_only_segments, args.buffer, video_duration)
+
+        # Recalculate totals
+        total_speech = sum(s["end"] - s["start"] for s in final_segments)
+        speech_ratio = total_speech / video_duration if video_duration > 0 else 0.0
+
+        log(f"VAD-only: {len(final_segments)} segments, "
+            f"{total_speech:.1f}s speech ({speech_ratio:.2f})")
+
     # Clean output — only start, end, confidence
     output_segments = [
         {"start": s["start"], "end": s["end"], "confidence": s["confidence"]}
