@@ -251,17 +251,13 @@ INSTRUCTIONS:
    - Never mix words from different takes into one sentence
    - Each segment must be a continuous run of IDs (e.g., [90,91,92,93])
    - Prefer longer, complete takes over short fragments
-   - Words marked with * are SUSPECTED non-presenter speech (background voice,
-     crew, assistant). Usually you should NOT include them.
-     HOWEVER — if a starred word clearly COMPLETES a presenter's sentence
-     (e.g., "מאחורי הקלעים התוצאה" needs "*היא* *פשוטה*" to make sense),
-     you SHOULD include it. The system sometimes incorrectly flags the
-     presenter's quiet words as non-presenter.
-
-     Rules for starred words:
-     - Starred word is isolated between long silences → EXCLUDE (likely crew)
-     - Starred word continues a presenter sentence seamlessly → INCLUDE (false positive)
-     - When in doubt and the word completes a sentence → INCLUDE
+   - Words marked with * are non-presenter speech (background voice, crew,
+     production assistant). Do NOT include them in your keep_ranges.
+     The ONLY exception: if a single starred word (not a sequence of 2+ starred
+     words) appears between two presenter words and is clearly the same speaker
+     continuing the same sentence, you may include it.
+     If you see 2 or more consecutive starred words — they are definitely
+     non-presenter. NEVER include a sequence of starred words.
    - Words marked with ~ were flagged as duplicates — usually exclude them
    - The final video should be 30-60 seconds for a service ad
    - CRITICAL: List EVERY SINGLE ID in a chosen take. Do not skip numbers.

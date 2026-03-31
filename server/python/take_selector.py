@@ -609,6 +609,46 @@ def apply_take_scoring(decisions, presenter_words, audio_data, sample_rate, over
 
 # ── Priority & Protection ────────────────────────────
 
+def detect_internal_retakes(words, already_removed):
+    """
+    Scan within each take for repeated 3+ word sequences.
+    If "פרויקט חד פעמי" appears at positions 5-7 AND again at 15-17
+    within the same take — remove the FIRST occurrence (keep last).
+    """
+    remove_ids = set()
+    decisions = []
+
+    active = [w for w in words if w['id'] not in already_removed]
+
+    # Build takes (gap > 500ms = new take)
+    takes = build_takes(active, already_removed)
+
+    for take in takes:
+        if len(take) < 6:  # too short for internal retakes
+            continue
+
+        take_words = [w['word'] for w in take]
+
+        # Sliding window: look for 3-gram that appears twice
+        for i in range(len(take_words) - 2):
+            trigram = take_words[i:i+3]
+            # Search for same trigram later in the take
+            for j in range(i + 3, len(take_words) - 2):
+                if take_words[j:j+3] == trigram:
+                    # Found internal retake! Remove from i to j-1
+                    ids_to_remove = [take[k]['id'] for k in range(i, j)]
+                    remove_ids.update(ids_to_remove)
+                    decisions.append({
+                        'ids': sorted(ids_to_remove),
+                        'reason': 'internal_retake'
+                    })
+                    break  # only handle first match per trigram
+            if remove_ids:
+                break  # restart scan after finding one
+
+    return remove_ids, decisions
+
+
 def apply_coarticulation_protection(remove_ids, presenter_words, decisions):
     """
     CRITICAL rule 3: If gap between two consecutive words < 20ms,
@@ -843,6 +883,12 @@ def main():
     for dec in all_decisions:
         all_remove_ids.update(dec["ids"])
 
+    # 6.5. Internal retake detection (within-take repeated phrases)
+    internal_ids, internal_decs = detect_internal_retakes(all_words, all_remove_ids)
+    all_remove_ids |= internal_ids
+    all_decisions.extend(internal_decs)
+    log(f"Internal retakes: {len(internal_decs)} found, {len(internal_ids)} words")
+
     # Filter: only remove presenter words (non-presenter already handled by merge)
     non_presenter_filtered = all_remove_ids - presenter_ids
     if non_presenter_filtered:
@@ -883,6 +929,7 @@ def main():
         "production_cues": reason_counts.get("production_cue", 0),
         "stutters": reason_counts.get("stutter", 0),
         "abandoned_takes": reason_counts.get("abandoned_take", 0),
+        "internal_retakes": reason_counts.get("internal_retake", 0),
         "total_removed_words": len(all_remove_ids),
     }
 
