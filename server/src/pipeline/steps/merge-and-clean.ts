@@ -115,7 +115,8 @@ async function runMerge(
     { pythonPath?: string } | undefined;
   const pythonPath = pdConfig?.pythonPath ?? 'python3';
 
-  const audioPath = join(jobDir, 'audio.wav');
+  const gatedAudioPath = join(jobDir, 'audio_gated.wav');
+  const audioPath = existsSync(gatedAudioPath) ? gatedAudioPath : join(jobDir, 'audio.wav');
   const args = [
     scriptPath,
     '--transcript', transcriptPath,
@@ -125,7 +126,7 @@ async function runMerge(
     '--audio', audioPath,
   ];
 
-  logger.info('Running merge_transcript.py', { transcriptPath, segmentsPath });
+  logger.info('Running merge_transcript.py', { transcriptPath, segmentsPath, audioPath });
 
   const { stdout, stderr } = await execFileAsync(pythonPath, args, {
     timeout: 30000,
@@ -155,7 +156,8 @@ async function runTakeSelector(
   logger: Logger,
 ): Promise<TakeDecisions> {
   const mergedPath = join(jobDir, 'merged_transcript.json');
-  const audioPath = join(jobDir, 'audio.wav');
+  const gatedAudioPath = join(jobDir, 'audio_gated.wav');
+  const audioPath = existsSync(gatedAudioPath) ? gatedAudioPath : join(jobDir, 'audio.wav');
   const outputPath = join(jobDir, 'take_decisions.json');
 
   const scriptPath = resolve('python', 'take_selector.py');
@@ -194,7 +196,7 @@ async function runTakeSelector(
     args.push('--scoring-override-margin', String(tsConfig.scoringOverrideMargin));
   }
 
-  logger.info('Running take_selector.py', { mergedPath });
+  logger.info('Running take_selector.py', { mergedPath, audioPath });
 
   const { stdout, stderr } = await execFileAsync(pythonPath, args, {
     timeout: 60000,
