@@ -134,7 +134,7 @@ def compute_rms(audio_data, sample_rate, start, end):
 # ── Text helpers ─────────────────────────────────────
 
 def cosine_similarity_bow(words_a, words_b):
-    """Cosine similarity between two word lists (bag of words)."""
+    """Cosine similarity between two word lists (bag of words). Fallback method."""
     counter_a = Counter(words_a)
     counter_b = Counter(words_b)
     all_keys = set(counter_a) | set(counter_b)
@@ -144,6 +144,56 @@ def cosine_similarity_bow(words_a, words_b):
     if mag_a == 0 or mag_b == 0:
         return 0.0
     return dot / (mag_a * mag_b)
+
+
+# ── Semantic similarity (Sentence Transformers) ─────
+
+_st_model = None
+_st_available = None
+
+
+def _load_st_model():
+    """Load multilingual sentence transformer model (lazy, once)."""
+    global _st_model, _st_available
+    if _st_available is not None:
+        return _st_available
+
+    try:
+        from sentence_transformers import SentenceTransformer
+        log("Loading sentence-transformers model: intfloat/multilingual-e5-small")
+        _st_model = SentenceTransformer("intfloat/multilingual-e5-small")
+        _st_available = True
+        log("Sentence-transformers model loaded successfully")
+        return True
+    except ImportError:
+        log("sentence-transformers not installed, falling back to BoW similarity")
+        _st_available = False
+        return False
+    except Exception as e:
+        log(f"Failed to load sentence-transformers model: {e}, falling back to BoW")
+        _st_available = False
+        return False
+
+
+def semantic_similarity(words_a, words_b):
+    """
+    Compute semantic similarity between two word lists.
+    Uses sentence-transformers (multilingual-e5-small) if available,
+    falls back to bag-of-words cosine similarity.
+    """
+    if _load_st_model():
+        text_a = " ".join(words_a)
+        text_b = " ".join(words_b)
+        # E5 models require "query: " or "passage: " prefix
+        embeddings = _st_model.encode(
+            [f"query: {text_a}", f"query: {text_b}"],
+            normalize_embeddings=True,
+        )
+        # Cosine similarity of normalized vectors = dot product
+        sim = float(embeddings[0] @ embeddings[1])
+        return sim
+    else:
+        return cosine_similarity_bow(words_a, words_b)
 
 
 def ends_with_punctuation(word_text):
@@ -303,7 +353,7 @@ def detect_full_abandoned_takes(presenter_words, cue_remove_ids):
         # Compare text similarity
         abandoned_text = [w["word"].strip() for w in abandoned_words]
         new_text = [w["word"].strip() for w in new_take_words[:len(abandoned_text) + 3]]
-        sim = cosine_similarity_bow(abandoned_text, new_text)
+        sim = semantic_similarity(abandoned_text, new_text)
 
         if sim > 0.5:
             # Delete the abandoned take
@@ -426,7 +476,7 @@ def find_similar_take_groups(takes, threshold, lookback_sec):
                 break
 
             text_j = [w["word"].strip() for w in takes[j]]
-            sim = cosine_similarity_bow(text_i, text_j)
+            sim = semantic_similarity(text_i, text_j)
             if sim >= threshold:
                 adjacency[i].add(j)
                 adjacency[j].add(i)

@@ -116,93 +116,32 @@ def main():
         print("[merge] No valid presenter_segments found, treating all words as presenter", file=sys.stderr)
         segments = []
 
-    # Build flat word array with sequential IDs (overlap-only detection)
+    # Build flat word array with sequential IDs
     word_list = []
-    presenter_count = 0
-    other_count = 0
 
     for idx, w in enumerate(words):
-        is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
-
         entry = {
             "id": idx,
             "word": w["word"],
             "start": w["start"],
             "end": w["end"],
-            "is_presenter": is_pres,
             "confidence": w.get("confidence", 0.0),
         }
-
         word_list.append(entry)
-        if is_pres:
-            presenter_count += 1
-        else:
-            other_count += 1
 
-    # ── Pass 2: RMS volume filtering ──
-    rms_filtered_count = 0
+    # ── Compute raw signals ──
+
+    # RMS per word
     if args.audio:
         try:
             audio_data, sample_rate = load_audio(args.audio)
-
-            # Compute RMS for every word
             for entry in word_list:
                 entry["rms"] = compute_word_rms(audio_data, sample_rate, entry["start"], entry["end"])
-
-            # Reference RMS = median of high-confidence presenter words
-            ref_rms_values = [
-                entry["rms"]
-                for entry in word_list
-                if entry["is_presenter"] and entry["confidence"] > 0.90 and entry["rms"] > 0
-            ]
-
-            if ref_rms_values:
-                reference_rms = float(np.median(ref_rms_values))
-                threshold = reference_rms * 0.40
-
-                for entry in word_list:
-                    if entry["is_presenter"] and entry["rms"] < threshold:
-                        entry["is_presenter"] = False
-                        rms_filtered_count += 1
-
-                # Rescue trailing words: if a non-presenter word is immediately
-                # after a presenter word (gap < 100ms) and there's no presenter
-                # word after it for at least 500ms — presenter finishing a sentence.
-                rescued_count = 0
-                for idx in range(len(word_list) - 1):
-                    curr = word_list[idx]
-                    next_w = word_list[idx + 1]
-
-                    if curr["is_presenter"] and not next_w["is_presenter"]:
-                        gap = next_w["start"] - curr["end"]
-                        if gap < 0.1:  # 100ms — same speaker continuing
-                            # Check if there's a long silence after this word
-                            if idx + 2 >= len(word_list) or word_list[idx + 2]["start"] - next_w["end"] > 0.5:
-                                next_w["is_presenter"] = True
-                                rescued_count += 1
-
-                if rescued_count > 0:
-                    print(
-                        f"[merge] Trailing word rescue: {rescued_count} words restored as presenter",
-                        file=sys.stderr,
-                    )
-                    rms_filtered_count -= rescued_count
-
-                # Update counters
-                presenter_count -= rms_filtered_count
-                other_count += rms_filtered_count
-
-                print(
-                    f"[merge] RMS filtering: reference_rms={reference_rms:.4f}, "
-                    f"threshold={threshold:.4f}, filtered_words={rms_filtered_count}",
-                    file=sys.stderr,
-                )
-            else:
-                print("[merge] RMS filtering: no high-confidence presenter words for reference, skipping", file=sys.stderr)
+            print(f"[merge] RMS computed for {len(word_list)} words", file=sys.stderr)
         except Exception as e:
-            print(f"[merge] RMS filtering failed, skipping: {e}", file=sys.stderr)
+            print(f"[merge] RMS computation failed, skipping: {e}", file=sys.stderr)
 
-    # ── Pass 3: Speaker verification (WeSpeaker) ──
+    # Speaker verification (WeSpeaker) — adds speaker_score per word
     speaker_verify_stats = None
     if args.speaker_verify and args.audio:
         try:
@@ -210,22 +149,19 @@ def main():
 
             print("[merge] Running WeSpeaker speaker verification...", file=sys.stderr)
 
-            # Build reference from presenter segments
             reference = build_reference_embedding(args.audio, segments)
 
             if reference is not None:
+                # verify_speaker adds speaker_score to each word
+                # We pass is_presenter=True for all temporarily — word_scorer will decide
+                for entry in word_list:
+                    entry["is_presenter"] = True
                 word_list, speaker_verify_stats = verify_speaker(
                     args.audio, word_list, reference,
                     threshold_high=0.6, threshold_low=0.4,
                 )
-
-                # Recount after speaker verification
-                presenter_count = sum(1 for w in word_list if w["is_presenter"])
-                other_count = len(word_list) - presenter_count
-
                 print(
-                    f"[merge] After speaker verification: "
-                    f"{presenter_count}/{len(word_list)} presenter words "
+                    f"[merge] Speaker scores computed "
                     f"(promoted={speaker_verify_stats['promoted']}, "
                     f"demoted={speaker_verify_stats['demoted']})",
                     file=sys.stderr,
@@ -238,6 +174,18 @@ def main():
             print(f"[merge] Speaker verification failed, skipping: {e}", file=sys.stderr)
     elif args.speaker_verify and not args.audio:
         print("[merge] Speaker verification skipped: --audio required", file=sys.stderr)
+
+    # ── Centralized scoring — single decision per word ──
+    from word_scorer import score_all_words
+
+    word_list = score_all_words(word_list, segments)
+
+    # Map final_decision to is_presenter
+    for entry in word_list:
+        entry["is_presenter"] = entry["final_decision"] != "reject"
+
+    presenter_count = sum(1 for w in word_list if w["is_presenter"])
+    other_count = len(word_list) - presenter_count
 
     processing_time_ms = int((time.time() - start_time) * 1000)
 
