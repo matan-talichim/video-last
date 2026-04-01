@@ -25,7 +25,14 @@ def _get_model():
     global _model
     if _model is None:
         from wespeakerruntime import Speaker
-        _model = Speaker(lang='en')
+        # Redirect stdout → stderr while loading: WeSpeaker prints download
+        # progress to stdout on first run, which breaks JSON parsing in TS.
+        _orig_stdout = sys.stdout
+        sys.stdout = sys.stderr
+        try:
+            _model = Speaker(lang='en')
+        finally:
+            sys.stdout = _orig_stdout
         print("[speaker-verify] WeSpeaker model loaded", file=sys.stderr)
     return _model
 
