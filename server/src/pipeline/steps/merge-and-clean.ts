@@ -62,6 +62,38 @@ interface AICleanResult {
   keep_ranges: KeepRange[];
 }
 
+function buildTakeSelectorHints(takeDecisions: TakeDecisions): string {
+  if (!takeDecisions || takeDecisions.decisions.length === 0) {
+    return 'No automated issues detected.';
+  }
+
+  const lines: string[] = [];
+  for (const d of takeDecisions.decisions) {
+    const ids = d.ids.join(', ');
+    switch (d.reason) {
+      case 'production_cue':
+        lines.push(`- Production instruction detected at words [${ids}] — likely "סליחה", "עוד פעם", etc.`);
+        break;
+      case 'duplicate_take':
+        lines.push(`- Duplicate take detected: words [${ids}] are a repeat. Better version at words [${d.kept_ids?.join(', ')}]`);
+        break;
+      case 'false_start':
+        lines.push(`- False start detected at words [${ids}] — presenter started and restarted`);
+        break;
+      case 'stutter':
+        lines.push(`- Stutter detected at words [${ids}]`);
+        break;
+      case 'internal_retake':
+        lines.push(`- Internal retake within a take at words [${ids}] — repeated phrase`);
+        break;
+      case 'abandoned_take':
+        lines.push(`- Abandoned take at words [${ids}] — presenter gave up on this version`);
+        break;
+    }
+  }
+  return lines.join('\n');
+}
+
 interface KeepSegment {
   start: number;
   end: number;
@@ -259,6 +291,15 @@ RULES:
 - CRITICAL: List EVERY SINGLE ID — do not skip numbers
 - Ignore production instructions ("סליחה", "עוד פעם", "סיימתי", "יופי", "מעולה", "אוקיי")
 
+AUTOMATED ANALYSIS HINTS:
+The following issues were detected by automated analysis. Use these as
+HINTS — you don't have to follow them, but they are usually correct:
+
+{{TAKE_SELECTOR_HINTS}}
+
+These hints can help you avoid selecting segments that contain
+production instructions, stutters, or inferior duplicate takes.
+
 RETURN FORMAT:
 {
   "keep_ranges": [
@@ -281,10 +322,12 @@ interface AIFinalReviewResult {
 
 async function runAINarrativeSelection(
   allWordsText: string,
+  hints: string,
   brain: AIBrain,
   logger: Logger,
 ): Promise<{ narrativeRanges: KeepRange[]; usage: AIUsage }> {
-  const userPrompt = NARRATIVE_PROMPT + allWordsText;
+  const prompt = NARRATIVE_PROMPT.replace('{{TAKE_SELECTOR_HINTS}}', hints);
+  const userPrompt = prompt + allWordsText;
 
   const aiConfig = loadConfig();
   const aiSettings = (aiConfig as unknown as Record<string, unknown>).ai as
@@ -726,9 +769,11 @@ export async function runMergeAndClean(
   const takeDecisions = await runTakeSelector(jobDir, logger);
   const takeSelectorIds = new Set(takeDecisions.remove_ids);
 
-  // Step 2: AI Step 1 — Select narrative from ALL words (no markers)
+  // Step 2: AI Step 1 — Select narrative from ALL words (with take selector hints)
   const allWordsText = buildNumberedTextRaw(merged.words);
-  const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, brain, logger);
+  const hints = buildTakeSelectorHints(takeDecisions);
+  logger.info('Take selector hints for AI', { hintCount: takeDecisions.decisions.length });
+  const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, brain, logger);
 
   // Step 3: Cross-reference with presenter detection
   const flaggedRanges = crossReferencePresenter(narrativeRanges, merged.words, logger);
