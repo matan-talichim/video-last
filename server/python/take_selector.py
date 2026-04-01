@@ -67,8 +67,9 @@ HEBREW_FILLERS = [
 ]
 
 # Thresholds (defaults, overridable via config)
-SIMILARITY_THRESHOLD = 0.70
-LOOKBACK_SECONDS = 15.0
+SIMILARITY_THRESHOLD = 0.75
+LOOKBACK_SECONDS = 10.0
+MAX_DUPLICATE_REMOVAL_RATIO = 0.50  # Never remove more than 50% of total presenter words
 SCORING_OVERRIDE_MARGIN = 0.20
 TARGET_WPS = 2.7
 COARTICULATION_GAP_MS = 20.0
@@ -528,7 +529,16 @@ def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec
     log(f"Repetition detection: {len(groups)} similar-take groups found")
 
     # Step 3: For each group, keep last take, remove the rest
+    # But never remove more than MAX_DUPLICATE_REMOVAL_RATIO of total presenter words
+    total_presenter = len([w for w in presenter_words if w["id"] not in already_removed])
+    max_removable = int(total_presenter * MAX_DUPLICATE_REMOVAL_RATIO)
+    removed_count = 0
+
     for group in groups:
+        if removed_count >= max_removable:
+            log(f"Duplicate removal cap reached ({removed_count}/{max_removable}), stopping")
+            break
+
         # Sort by start time — last take wins
         group_takes = [(idx, takes[idx]) for idx in group]
         group_takes.sort(key=lambda t: t[1][0]["start"])
@@ -538,7 +548,11 @@ def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec
 
         for idx, take in group_takes[:-1]:
             ids = sorted([w["id"] for w in take])
+            if removed_count + len(ids) > max_removable:
+                log(f"Skipping duplicate group ({len(ids)} words) — would exceed cap")
+                continue
             remove_ids.update(ids)
+            removed_count += len(ids)
             decisions.append({
                 "ids": ids,
                 "reason": "duplicate_take",
