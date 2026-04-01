@@ -105,13 +105,13 @@ def compute_final_score(word):
 def make_decision(word):
     """
     Three-tier decision with speaker_score override:
-    - speaker_score > 0.65: PRESENTER (strong speaker match alone is enough)
+    - speaker_score > 0.60: PRESENTER (strong speaker match alone is enough)
     - speaker_score < 0.30: REJECT (clearly not the presenter)
     - Otherwise use weighted final_score with thresholds 0.50 / 0.35
     """
     speaker = word.get("speaker_score", word.get("speaker_score_norm", 0.5))
 
-    if speaker > 0.65:
+    if speaker > 0.60:
         return "presenter"
     if speaker < 0.30:
         return "reject"
