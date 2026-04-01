@@ -20,6 +20,13 @@ interface Word {
   end: number;
   is_presenter: boolean;
   confidence: number;
+  final_decision?: 'presenter' | 'reject' | 'uncertain';
+  final_score?: number;
+  vad_score?: number;
+  visual_score?: number;
+  speaker_score?: number;
+  asr_score?: number;
+  energy_score?: number;
 }
 
 interface MergedTranscript {
@@ -216,6 +223,60 @@ async function runMerge(
   return result;
 }
 
+// ── Step 1.25: WhisperX alignment (Python) ──
+
+async function runAlignWords(
+  jobDir: string,
+  logger: Logger,
+): Promise<MergedTranscript> {
+  const mergedPath = join(jobDir, 'merged_transcript.json');
+  const gatedAudioPath = join(jobDir, 'audio_gated.wav');
+  const audioPath = existsSync(gatedAudioPath) ? gatedAudioPath : join(jobDir, 'audio.wav');
+  const alignedPath = join(jobDir, 'merged_transcript.json'); // overwrite in place
+
+  const scriptPath = resolve('python', 'align_words.py');
+
+  const config = loadConfig();
+  const pdConfig = (config as unknown as Record<string, unknown>).presenterDetection as
+    { pythonPath?: string } | undefined;
+  const pythonPath = pdConfig?.pythonPath ?? 'python3';
+
+  const args = [
+    scriptPath,
+    '--audio', audioPath,
+    '--words', mergedPath,
+    '--output', alignedPath,
+    '--language', 'he',
+  ];
+
+  logger.info('Running align_words.py (WhisperX forced alignment)', { audioPath });
+
+  try {
+    const { stdout, stderr } = await execFileAsync(pythonPath, args, {
+      timeout: 120000,
+    });
+
+    if (stderr) {
+      logger.debug('align_words.py stderr', { stderr: stderr.trim() });
+    }
+
+    const result = JSON.parse(stdout) as MergedTranscript;
+    logger.info('WhisperX alignment completed', {
+      method: (result.stats as Record<string, unknown>).alignment
+        ? ((result.stats as Record<string, unknown>).alignment as Record<string, unknown>).method
+        : 'unknown',
+    });
+
+    return result;
+  } catch (err) {
+    logger.warn('WhisperX alignment failed, using original timestamps', {
+      error: (err as Error).message,
+    });
+    // Fallback: read the existing merged transcript
+    return JSON.parse(readFileSync(mergedPath, 'utf-8')) as MergedTranscript;
+  }
+}
+
 // ── Step 1.5: Take Selector (Python, rule-based) ──
 
 async function runTakeSelector(
@@ -315,9 +376,12 @@ function buildStructuredText(
     let prefix = '';
     let suffix = '';
 
-    if (!w.is_presenter) {
+    if (!w.is_presenter && w.final_decision !== 'uncertain') {
       prefix = '*';
       suffix = '*';
+    } else if (w.final_decision === 'uncertain') {
+      prefix = '?';
+      suffix = '?';
     } else if (takeSelectorIds.has(w.id)) {
       prefix = '~';
       suffix = '~';
@@ -415,6 +479,11 @@ CRITICAL RULES:
   Include everything the PRESENTER said, not everything in the transcript.
 
 - TAKE BREAKS: Never select IDs that cross a "--- TAKE N ---" boundary.
+
+- UNCERTAIN WORDS (?): Words marked with ? are UNCERTAIN — the system
+  couldn't determine if they belong to the presenter or to background voice.
+  Use your judgment: if the word fits naturally in a presenter sentence,
+  include it. If it seems out of place — exclude it.
 
 - PREFER CLEAN WORDS: Avoid words marked with * (non-presenter)
   and ~ (flagged by analysis). Strongly avoid including
@@ -944,7 +1013,10 @@ export async function runMergeAndClean(
   });
 
   // Step 1: Merge
-  const merged = await runMerge(jobDir, logger);
+  let merged = await runMerge(jobDir, logger);
+
+  // Step 1.25: WhisperX alignment (improve word timestamps)
+  merged = await runAlignWords(jobDir, logger);
 
   // Step 1.5: Take selector (rule-based duplicate detection — metadata/hints)
   const takeDecisions = await runTakeSelector(jobDir, logger);
