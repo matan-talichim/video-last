@@ -27,8 +27,8 @@ WEIGHT_ENERGY = 0.20
 WEIGHT_ASR = 0.15
 WEIGHT_VISUAL = 0.10
 
-THRESHOLD_PRESENTER = 0.6
-THRESHOLD_REJECT = 0.4
+THRESHOLD_PRESENTER = 0.50
+THRESHOLD_REJECT = 0.35
 
 # Energy normalization cap (very loud)
 ENERGY_CAP = 0.3
@@ -102,16 +102,24 @@ def compute_final_score(word):
     )
 
 
-def make_decision(final_score):
+def make_decision(word):
     """
-    Three-tier decision:
-    - >= 0.6: PRESENTER — high confidence, include
-    - < 0.4: REJECT — high confidence it's not presenter, exclude
-    - 0.4-0.6: UNCERTAIN — let AI decide
+    Three-tier decision with speaker_score override:
+    - speaker_score > 0.65: PRESENTER (strong speaker match alone is enough)
+    - speaker_score < 0.30: REJECT (clearly not the presenter)
+    - Otherwise use weighted final_score with thresholds 0.50 / 0.35
     """
-    if final_score >= THRESHOLD_PRESENTER:
+    speaker = word.get("speaker_score", word.get("speaker_score_norm", 0.5))
+
+    if speaker > 0.65:
         return "presenter"
-    elif final_score < THRESHOLD_REJECT:
+    if speaker < 0.30:
+        return "reject"
+
+    final = word["final_score"]
+    if final >= THRESHOLD_PRESENTER:
+        return "presenter"
+    elif final < THRESHOLD_REJECT:
         return "reject"
     else:
         return "uncertain"
@@ -142,7 +150,7 @@ def score_all_words(words, presenter_segments):
 
         # FINAL DECISION
         word["final_score"] = round(compute_final_score(word), 4)
-        word["final_decision"] = make_decision(word["final_score"])
+        word["final_decision"] = make_decision(word)
 
     # Summary stats
     total = len(words)

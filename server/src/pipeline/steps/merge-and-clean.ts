@@ -901,6 +901,71 @@ function validateKeepRanges(
   });
 }
 
+// ── Split ranges that cross take breaks (gap > 1s between consecutive words) ──
+
+function splitRangesAtTakeBreaks(
+  keepRanges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+): KeepRange[] {
+  const wordsMap = new Map<number, Word>();
+  for (const w of words) {
+    wordsMap.set(w.id, w);
+  }
+
+  const result: KeepRange[] = [];
+
+  for (const range of keepRanges) {
+    let currentSegment: number[] = [];
+
+    for (let i = 0; i < range.ids.length; i++) {
+      const id = range.ids[i]!;
+      currentSegment.push(id);
+
+      // Check if there's a take break after this word
+      if (i < range.ids.length - 1) {
+        const currentWord = wordsMap.get(id);
+        const nextWord = wordsMap.get(range.ids[i + 1]!);
+
+        if (currentWord && nextWord) {
+          const gap = nextWord.start - currentWord.end;
+          if (gap > 1.0) {
+            // TAKE BREAK — split here
+            logger.warn('Splitting range at take break', {
+              gap,
+              beforeWord: currentWord.word,
+              afterWord: nextWord.word,
+              segmentLength: currentSegment.length,
+            });
+            if (currentSegment.length >= 4) {
+              result.push({
+                ids: [...currentSegment],
+                reason: range.reason + ' [split at take break]',
+              });
+            }
+            currentSegment = [];
+          }
+        }
+      }
+    }
+
+    // Add remaining segment
+    if (currentSegment.length >= 4) {
+      result.push({
+        ids: currentSegment,
+        reason: range.reason,
+      });
+    }
+  }
+
+  logger.info('splitRangesAtTakeBreaks', {
+    before: keepRanges.length,
+    after: result.length,
+  });
+
+  return result;
+}
+
 // ── Step 3: Build keep/remove segments from words ──
 
 function buildSegments(
@@ -1051,8 +1116,11 @@ export async function runMergeAndClean(
     removed: narrativeRanges.length - validatedRanges.length,
   });
 
+  // Step 2.6: Split ranges that cross take breaks (gap > 1s)
+  const splitRanges = splitRangesAtTakeBreaks(validatedRanges, merged.words, logger);
+
   // Step 3: Cross-reference with presenter detection
-  const flaggedRanges = crossReferencePresenter(validatedRanges, merged.words, logger);
+  const flaggedRanges = crossReferencePresenter(splitRanges, merged.words, logger);
 
   // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
   const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
