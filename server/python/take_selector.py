@@ -766,12 +766,15 @@ def build_ranked_candidates(words, all_words, already_removed, audio_data=None, 
     active = [w for w in words if w['id'] not in already_removed
               and w.get('is_presenter', True)]
     takes = build_takes(active, already_removed)
+    log(f"[candidates] Active words: {len(active)}, Takes: {len(takes)}")
 
     if not takes:
+        log("[candidates] No takes found — returning empty candidates")
         return []
 
     # Group similar takes
     groups = find_similar_take_groups(takes, threshold=0.70, lookback_sec=999)
+    log(f"[candidates] Groups found: {len(groups)}")
 
     ranked = []
     for group_indices in groups:
