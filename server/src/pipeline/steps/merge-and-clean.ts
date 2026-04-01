@@ -966,6 +966,167 @@ function splitRangesAtTakeBreaks(
   return result;
 }
 
+// ── Enforce starred words limit (max consecutive non-presenter words per segment) ──
+
+function enforceStarredLimit(
+  keepRanges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+  maxConsecutiveStarred: number = 1,
+): KeepRange[] {
+  const wordsMap = new Map<number, Word>();
+  for (const w of words) {
+    wordsMap.set(w.id, w);
+  }
+
+  const result: KeepRange[] = [];
+
+  for (const range of keepRanges) {
+    // Count max consecutive starred (non-presenter) words
+    let maxConsec = 0;
+    let currentConsec = 0;
+    let totalStarred = 0;
+
+    for (const id of range.ids) {
+      const word = wordsMap.get(id);
+      if (word && !word.is_presenter) {
+        currentConsec++;
+        totalStarred++;
+        maxConsec = Math.max(maxConsec, currentConsec);
+      } else {
+        currentConsec = 0;
+      }
+    }
+
+    if (maxConsec > maxConsecutiveStarred) {
+      // Try to trim starred words from edges
+      const trimmedIds = trimStarredEdges(range.ids, wordsMap);
+
+      if (trimmedIds.length >= 4) {
+        // Re-check after trimming
+        let stillBad = false;
+        let consec = 0;
+        for (const id of trimmedIds) {
+          const w = wordsMap.get(id);
+          if (w && !w.is_presenter) { consec++; } else { consec = 0; }
+          if (consec > maxConsecutiveStarred) { stillBad = true; break; }
+        }
+
+        if (!stillBad) {
+          result.push({ ids: trimmedIds, reason: range.reason + ' [trimmed starred]' });
+        } else {
+          logger.warn('Removing segment with too many starred words', {
+            ids: range.ids, totalStarred, maxConsec,
+          });
+        }
+      } else {
+        logger.warn('Removing segment with too many starred words (too short after trim)', {
+          ids: range.ids, totalStarred, maxConsec,
+        });
+      }
+    } else {
+      result.push(range);
+    }
+  }
+
+  logger.info('enforceStarredLimit', {
+    before: keepRanges.length,
+    after: result.length,
+    removed: keepRanges.length - result.length,
+  });
+
+  return result;
+}
+
+function trimStarredEdges(ids: number[], wordsMap: Map<number, Word>): number[] {
+  let start = 0;
+  let end = ids.length - 1;
+
+  // Trim starred from start
+  while (start < ids.length) {
+    const w = wordsMap.get(ids[start]!);
+    if (w && !w.is_presenter) { start++; } else { break; }
+  }
+
+  // Trim starred from end
+  while (end >= 0) {
+    const w = wordsMap.get(ids[end]!);
+    if (w && !w.is_presenter) { end--; } else { break; }
+  }
+
+  return ids.slice(start, end + 1);
+}
+
+// ── Deduplicate repeated phrases within a single segment ──
+
+function deduplicateWithinSegments(
+  keepRanges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+): KeepRange[] {
+  const wordsMap = new Map<number, Word>();
+  for (const w of words) {
+    wordsMap.set(w.id, w);
+  }
+
+  const result: KeepRange[] = [];
+
+  for (const range of keepRanges) {
+    const rangeWords = range.ids
+      .map(id => wordsMap.get(id))
+      .filter((w): w is Word => w !== undefined);
+
+    const wordsList = rangeWords.map(w => w.word);
+    let foundDuplicate = false;
+
+    // Check if any 4+ word sequence repeats within the segment
+    for (let len = Math.floor(wordsList.length / 2); len >= 4; len--) {
+      for (let i = 0; i <= wordsList.length - len * 2; i++) {
+        const phrase = wordsList.slice(i, i + len).join(' ');
+        const rest = wordsList.slice(i + len).join(' ');
+
+        if (rest.includes(phrase)) {
+          // Found duplicate — keep the second (later) occurrence
+          const midpoint = Math.floor(range.ids.length / 2);
+          const secondHalf = range.ids.slice(midpoint);
+
+          if (secondHalf.length >= 4) {
+            logger.warn('Deduplicating repeated phrase within segment', {
+              phrase,
+              originalLength: range.ids.length,
+              keptLength: secondHalf.length,
+            });
+            result.push({
+              ids: secondHalf,
+              reason: range.reason + ' [deduped - kept later version]',
+            });
+          } else {
+            logger.warn('Removing segment with repeated phrase (too short after dedup)', {
+              phrase,
+              originalLength: range.ids.length,
+            });
+          }
+          foundDuplicate = true;
+          break;
+        }
+      }
+      if (foundDuplicate) break;
+    }
+
+    if (!foundDuplicate) {
+      result.push(range);
+    }
+  }
+
+  logger.info('deduplicateWithinSegments', {
+    before: keepRanges.length,
+    after: result.length,
+    deduped: keepRanges.length - result.length,
+  });
+
+  return result;
+}
+
 // ── Step 3: Build keep/remove segments from words ──
 
 function buildSegments(
@@ -1119,8 +1280,14 @@ export async function runMergeAndClean(
   // Step 2.6: Split ranges that cross take breaks (gap > 1s)
   const splitRanges = splitRangesAtTakeBreaks(validatedRanges, merged.words, logger);
 
+  // Step 2.7: Enforce starred words limit (max 1 consecutive non-presenter)
+  const starredEnforced = enforceStarredLimit(splitRanges, merged.words, logger);
+
+  // Step 2.8: Deduplicate repeated phrases within segments
+  const dedupedRanges = deduplicateWithinSegments(starredEnforced, merged.words, logger);
+
   // Step 3: Cross-reference with presenter detection
-  const flaggedRanges = crossReferencePresenter(splitRanges, merged.words, logger);
+  const flaggedRanges = crossReferencePresenter(dedupedRanges, merged.words, logger);
 
   // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
   const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);

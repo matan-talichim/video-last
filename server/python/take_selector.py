@@ -766,15 +766,30 @@ def build_ranked_candidates(words, all_words, already_removed, audio_data=None, 
     active = [w for w in words if w['id'] not in already_removed
               and w.get('is_presenter', True)]
     takes = build_takes(active, already_removed)
-    log(f"[candidates] Active words: {len(active)}, Takes: {len(takes)}")
+    print(f"[candidates] Active presenter words: {len(active)}", file=sys.stderr)
+    print(f"[candidates] Takes built: {len(takes)}", file=sys.stderr)
+    for i, t in enumerate(takes[:5]):
+        text = ' '.join([w['word'] for w in t])[:60]
+        print(f"[candidates]   Take {i}: {len(t)} words: {text}...", file=sys.stderr)
 
     if not takes:
-        log("[candidates] No takes found — returning empty candidates")
+        print("[candidates] No takes found — returning empty candidates", file=sys.stderr)
+        return []
+
+    if len(takes) < 2:
+        print("[candidates] Not enough takes to compare", file=sys.stderr)
         return []
 
     # Group similar takes
     groups = find_similar_take_groups(takes, threshold=0.70, lookback_sec=999)
-    log(f"[candidates] Groups found: {len(groups)}")
+    print(f"[candidates] Similar groups found (threshold=0.70): {len(groups)}", file=sys.stderr)
+
+    # Retry with lower threshold if no groups found
+    if len(groups) == 0 and len(takes) >= 2:
+        groups = find_similar_take_groups(takes, threshold=0.50, lookback_sec=999)
+        print(f"[candidates] Retry with threshold=0.50: {len(groups)} groups", file=sys.stderr)
+
+    log(f"[candidates] Final groups: {len(groups)}")
 
     ranked = []
     for group_indices in groups:
@@ -1005,6 +1020,15 @@ def main():
         except Exception as e:
             log(f"Could not load audio: {e}")
 
+    # 0. Build ranked candidates BEFORE any removals (so all takes are visible)
+    candidates = build_ranked_candidates(
+        words=all_words,
+        all_words=all_words,
+        already_removed=set(),
+        audio_data=audio_data,
+        sample_rate=sample_rate or 16000,
+    )
+
     all_remove_ids = set()
     all_decisions = []
 
@@ -1090,8 +1114,7 @@ def main():
     # Ensure only presenter words remain in remove_ids after protections
     all_remove_ids &= presenter_ids
 
-    # 8.5. Build ranked candidates (for AI referee)
-    candidates = build_ranked_candidates(all_words, all_words, all_remove_ids, audio_data, sample_rate or 16000)
+    # 8.5. Candidates already built in step 0 (before removals)
 
     # 9. Deduplicate and clean decisions (priority-based conflict resolution)
     all_decisions = deduplicate_decisions(all_decisions, all_remove_ids)
