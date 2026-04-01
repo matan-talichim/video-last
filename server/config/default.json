@@ -57,7 +57,8 @@
     "lipThreshold": 0.25,
     "vadThreshold": 0.75,
     "buffer": 0.1,
-    "pythonPath": "python3"
+    "pythonPath": "python3",
+    "speakerVerify": true
   },
   "editAssembly": {
     "paddingStart": 0.03,

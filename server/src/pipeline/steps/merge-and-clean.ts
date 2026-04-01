@@ -149,6 +149,8 @@ async function runMerge(
 
   const gatedAudioPath = join(jobDir, 'audio_gated.wav');
   const audioPath = existsSync(gatedAudioPath) ? gatedAudioPath : join(jobDir, 'audio.wav');
+  const speakerVerify = (pdConfig as { speakerVerify?: boolean } | undefined)?.speakerVerify ?? false;
+
   const args = [
     scriptPath,
     '--transcript', transcriptPath,
@@ -156,12 +158,13 @@ async function runMerge(
     '--output', outputPath,
     '--buffer', '0.25',
     '--audio', audioPath,
+    ...(speakerVerify ? ['--speaker-verify'] : []),
   ];
 
-  logger.info('Running merge_transcript.py', { transcriptPath, segmentsPath, audioPath });
+  logger.info('Running merge_transcript.py', { transcriptPath, segmentsPath, audioPath, speakerVerify });
 
   const { stdout, stderr } = await execFileAsync(pythonPath, args, {
-    timeout: 30000,
+    timeout: speakerVerify ? 120000 : 30000,
   });
 
   if (stderr) {

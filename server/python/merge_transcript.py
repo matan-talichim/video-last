@@ -25,6 +25,8 @@ def parse_args():
     parser.add_argument("--output", required=True, help="Path to output merged_transcript.json")
     parser.add_argument("--buffer", type=float, default=0.25, help="Buffer in seconds around each segment")
     parser.add_argument("--audio", default=None, help="Path to audio.wav for RMS volume filtering")
+    parser.add_argument("--speaker-verify", action="store_true", default=False,
+                        help="Enable WeSpeaker speaker verification (requires wespeaker-onnx)")
     return parser.parse_args()
 
 
@@ -200,6 +202,43 @@ def main():
         except Exception as e:
             print(f"[merge] RMS filtering failed, skipping: {e}", file=sys.stderr)
 
+    # ── Pass 3: Speaker verification (WeSpeaker) ──
+    speaker_verify_stats = None
+    if args.speaker_verify and args.audio:
+        try:
+            from speaker_verify import build_reference_embedding, verify_speaker
+
+            print("[merge] Running WeSpeaker speaker verification...", file=sys.stderr)
+
+            # Build reference from presenter segments
+            reference = build_reference_embedding(args.audio, segments)
+
+            if reference is not None:
+                word_list, speaker_verify_stats = verify_speaker(
+                    args.audio, word_list, reference,
+                    threshold_high=0.6, threshold_low=0.4,
+                )
+
+                # Recount after speaker verification
+                presenter_count = sum(1 for w in word_list if w["is_presenter"])
+                other_count = len(word_list) - presenter_count
+
+                print(
+                    f"[merge] After speaker verification: "
+                    f"{presenter_count}/{len(word_list)} presenter words "
+                    f"(promoted={speaker_verify_stats['promoted']}, "
+                    f"demoted={speaker_verify_stats['demoted']})",
+                    file=sys.stderr,
+                )
+            else:
+                print("[merge] Speaker verification skipped: no reference embedding", file=sys.stderr)
+        except ImportError as e:
+            print(f"[merge] Speaker verification unavailable (missing dependency): {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[merge] Speaker verification failed, skipping: {e}", file=sys.stderr)
+    elif args.speaker_verify and not args.audio:
+        print("[merge] Speaker verification skipped: --audio required", file=sys.stderr)
+
     processing_time_ms = int((time.time() - start_time) * 1000)
 
     result = {
@@ -212,6 +251,9 @@ def main():
             "processing_time_ms": processing_time_ms,
         },
     }
+
+    if speaker_verify_stats:
+        result["stats"]["speaker_verify"] = speaker_verify_stats
 
     # Write to output file
     with open(args.output, "w", encoding="utf-8") as f:
