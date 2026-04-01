@@ -432,8 +432,19 @@ The presenter said each part multiple times. For each part:
 
 STEP 3 — BUILD THE FULL VIDEO:
 Select segments that cover the ENTIRE marketing message.
-Target: use 60-80% of available presenter words.
+COVERAGE TARGET: You MUST select at least 60% of available presenter words.
+If your selection is below 60%, go back and add more segments.
+Count: if there are 170 presenter words, select at least 102.
 If you're selecting less than 50% — you're cutting too much!
+
+MISSING PARTS CHECK: Before returning, verify you have:
+✓ Hook (opening)
+✓ Problem statement
+✓ Solution/what you offer
+✓ How it works (mechanism/process)
+✓ Result/proof/guarantee
+✓ Call to action
+If ANY part is missing — find it in the transcript and add it!
 
 A 30-40 second video from 2.5 minutes of raw footage should have
 7-10 segments covering every part of the message.
@@ -887,7 +898,24 @@ function validateKeepRanges(
       const prevWord = wordsMap.get(prevId);
       if (prevWord) {
         const gap = firstWord.start - prevWord.end;
-        if (gap < 0.3) {
+        if (gap < 0.15) {
+          // Very close to previous word — likely a trailing word from prior sentence
+          const trimmed = range.ids.slice(1);
+          if (trimmed.length >= 4) {
+            logger.info('Trimmed leading word from segment', {
+              removed: firstWord.word,
+              prevWord: prevWord.word,
+              gap,
+            });
+            range.ids = trimmed;
+          } else {
+            logger.warn('Suspicious segment start but too short to trim', {
+              firstWord: firstWord.word,
+              prevWord: prevWord.word,
+              gap,
+            });
+          }
+        } else if (gap < 0.3) {
           logger.warn('Suspicious segment start: very close to previous word', {
             firstWord: firstWord.word,
             prevWord: prevWord.word,
