@@ -465,10 +465,26 @@ CRITICAL RULES:
   starts at second 50, A must come before B in your output.
   NEVER put a later timestamp before an earlier one.
 
-- COMPLETE SENTENCES: Every segment must start at the beginning of a
-  sentence and end at the end of a sentence. No fragments.
-  BAD: "לך שהחיסכון החודשי..." (starts mid-sentence)
-  GOOD: "ואם אני לא מראה לך שהחיסכון החודשי..."
+- COMPLETE SENTENCES — CRITICAL:
+  Every segment MUST be a sentence that makes sense ON ITS OWN.
+
+  Test: Read just the segment text. Does it sound like a complete thought?
+
+  BAD starts (fragments — NEVER start a segment with these):
+  ✗ "שלך הוא לא..." (missing "העסק")
+  ✗ "חד פעמי..." (missing "זה פרויקט")
+  ✗ "לוקחים 23..." (missing "אנחנו")
+  ✗ "שהחיסכון..." (starts with ש' prefix)
+  ✗ "לך שהחיסכון..." (starts mid-sentence)
+
+  BAD ends (fragments — NEVER end a segment with these):
+  ✗ "...המערכת לא" (hanging "לא")
+  ✗ "...מחליף את" (hanging "את")
+
+  GOOD segments (complete thoughts):
+  ✓ "אם כל לקוח חדש אצלך גורם לך לחשוב אולי אני צריך עוד עובד"
+  ✓ "העסק שלך הוא לא בנוי לצמיחה הוא בנוי לעבודה ידנית"
+  ✓ "אנחנו לוקחים 2-3 תהליכים שגונבים לך הכי הרבה זמן"
 
 - FULL MESSAGE COVERAGE: Your selection must include:
   * A hook (the opening)
@@ -751,10 +767,18 @@ INSTRUCTIONS:
 
      1. Does it START with the beginning of a sentence?
         BAD: "לך שהחיסכון החודשי..." (starts mid-sentence with "לך")
+        BAD: "שלך הוא לא..." (missing "העסק")
+        BAD: "חד פעמי..." (missing "זה פרויקט")
+        BAD: "לוקחים 23..." (missing "אנחנו")
+        BAD: "שהחיסכון..." (starts with ש' prefix — always mid-sentence)
         GOOD: "ואם אני לא מראה לך שהחיסכון החודשי..."
+        GOOD: "העסק שלך הוא לא בנוי לצמיחה הוא בנוי לעבודה ידנית"
+        GOOD: "אנחנו לוקחים 2-3 תהליכים שגונבים לך הכי הרבה זמן"
 
      2. Does it END with a complete thought?
         BAD: "...ולא מחליף" (hanging, no object)
+        BAD: "...המערכת לא" (hanging "לא")
+        BAD: "...מחליף את" (hanging "את")
         GOOD: "...ולא מחליף כלים" or "...ולא מחליף את הצוות"
 
      3. Can it stand ALONE as a meaningful statement?
@@ -898,29 +922,13 @@ function validateKeepRanges(
       const prevWord = wordsMap.get(prevId);
       if (prevWord) {
         const gap = firstWord.start - prevWord.end;
-        if (gap < 0.15) {
-          // Very close to previous word — likely a trailing word from prior sentence
-          const trimmed = range.ids.slice(1);
-          if (trimmed.length >= 4) {
-            logger.info('Trimmed leading word from segment', {
-              removed: firstWord.word,
-              prevWord: prevWord.word,
-              gap,
-            });
-            range.ids = trimmed;
-          } else {
-            logger.warn('Suspicious segment start but too short to trim', {
-              firstWord: firstWord.word,
-              prevWord: prevWord.word,
-              gap,
-            });
-          }
-        } else if (gap < 0.3) {
-          logger.warn('Suspicious segment start: very close to previous word', {
+        if (gap < 0.3) {
+          logger.warn('Segment starts close to previous word', {
             firstWord: firstWord.word,
             prevWord: prevWord.word,
             gap,
           });
+          // Do NOT trim — the AI chose this range intentionally
         }
       }
     }
