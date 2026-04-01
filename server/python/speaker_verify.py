@@ -9,8 +9,11 @@ Used by merge_transcript.py when --speaker-verify is passed.
 Logs to stderr (stdout reserved for JSON).
 """
 
+import os
 import sys
+import tempfile
 import time
+import wave
 
 import numpy as np
 
@@ -21,10 +24,53 @@ def _get_model():
     """Lazy-load WeSpeaker ONNX model (loaded once, reused)."""
     global _model
     if _model is None:
-        import wespeaker
-        _model = wespeaker.load_model("english")
+        from wespeakerruntime import Speaker
+        _model = Speaker(lang='en')
         print("[speaker-verify] WeSpeaker model loaded", file=sys.stderr)
     return _model
+
+
+def _extract_embedding_range(model, audio_path, start, end):
+    """
+    Extract embedding for a time range by slicing the WAV to a temp file.
+
+    wespeakerruntime only supports extract_embedding(path) on a whole file,
+    so we slice the audio using the stdlib wave module and write a temp WAV.
+
+    Returns numpy array or None on failure.
+    """
+    tmp_path = None
+    try:
+        with wave.open(audio_path, 'rb') as wf:
+            framerate = wf.getframerate()
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+
+            start_frame = int(start * framerate)
+            end_frame = int(end * framerate)
+            n_frames = end_frame - start_frame
+
+            if n_frames <= 0:
+                return None
+
+            wf.setpos(start_frame)
+            frames = wf.readframes(n_frames)
+
+        fd, tmp_path = tempfile.mkstemp(suffix='.wav', prefix='spkv_')
+        os.close(fd)
+
+        with wave.open(tmp_path, 'wb') as out_wf:
+            out_wf.setnchannels(n_channels)
+            out_wf.setsampwidth(sampwidth)
+            out_wf.setframerate(framerate)
+            out_wf.writeframes(frames)
+
+        emb = model.extract_embedding(tmp_path)
+        return emb
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def _cosine_similarity(a, b):
@@ -70,7 +116,7 @@ def build_reference_embedding(audio_path, segments, top_n=5):
             continue
 
         try:
-            emb = model.extract_embedding_wav(audio_path, seg_start, seg_end)
+            emb = _extract_embedding_range(model, audio_path, seg_start, seg_end)
             if emb is not None and len(emb) > 0:
                 embeddings.append(np.array(emb).flatten())
         except Exception as e:
@@ -131,7 +177,7 @@ def verify_speaker(audio_path, words, reference_embedding, threshold_high=0.6, t
             continue
 
         try:
-            emb = model.extract_embedding_wav(audio_path, chunk_start, chunk_end)
+            emb = _extract_embedding_range(model, audio_path, chunk_start, chunk_end)
             if emb is None or len(emb) == 0:
                 for w in chunk:
                     w["speaker_score"] = -1.0
