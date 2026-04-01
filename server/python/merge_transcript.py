@@ -180,6 +180,11 @@ def main():
 
     word_list = score_all_words(word_list, segments)
 
+    # Sort words chronologically and re-assign IDs
+    word_list.sort(key=lambda w: w['start'])
+    for i, w in enumerate(word_list):
+        w['id'] = i
+
     # Map final_decision to is_presenter
     for entry in word_list:
         entry["is_presenter"] = entry["final_decision"] != "reject"

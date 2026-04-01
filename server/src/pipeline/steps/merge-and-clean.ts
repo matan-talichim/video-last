@@ -360,7 +360,18 @@ function buildStructuredText(
   words: Word[],
   takeSelectorIds: Set<number>,
   hardRejectedIds: Set<number>,
+  logger?: Logger,
 ): string {
+  // Validate chronological order
+  for (let i = 1; i < words.length; i++) {
+    if (words[i]!.start < words[i - 1]!.start - 0.1) {
+      logger?.warn('Words not in chronological order', {
+        id: words[i]!.id, start: words[i]!.start,
+        prevId: words[i - 1]!.id, prevStart: words[i - 1]!.start,
+      });
+    }
+  }
+
   const parts: string[] = [];
   let takeNumber = 1;
 
@@ -1296,7 +1307,7 @@ export async function runMergeAndClean(
   logger.info('Hard rejected words (hidden from AI)', { count: hardRejectedIds.size });
 
   // Step 2: AI Step 1 — Select narrative from ALL words (with take selector hints)
-  const allWordsText = buildStructuredText(merged.words, takeSelectorIds, hardRejectedIds);
+  const allWordsText = buildStructuredText(merged.words, takeSelectorIds, hardRejectedIds, logger);
   const hints = buildTakeSelectorHints(takeDecisions);
   const candidatesText = buildCandidatesText(takeDecisions);
   logger.info('Take selector hints for AI', {
