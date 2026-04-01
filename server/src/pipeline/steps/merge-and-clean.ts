@@ -971,15 +971,25 @@ function splitRangesAtTakeBreaks(
 
       // Check if there's a take break after this word
       if (i < range.ids.length - 1) {
+        const nextId = range.ids[i + 1]!;
         const currentWord = wordsMap.get(id);
-        const nextWord = wordsMap.get(range.ids[i + 1]!);
+        const nextWord = wordsMap.get(nextId);
 
         if (currentWord && nextWord) {
           const gap = nextWord.start - currentWord.end;
-          if (gap > 1.0) {
-            // TAKE BREAK — split here
+          const idGap = nextId - id;
+          let shouldSplit = false;
+
+          // Split on time gap > 1.0s
+          if (gap > 1.0) shouldSplit = true;
+
+          // Split on ID gap > 3 (skipped words = different take)
+          if (idGap > 3) shouldSplit = true;
+
+          if (shouldSplit) {
             logger.warn('Splitting range at take break', {
               gap,
+              idGap,
               beforeWord: currentWord.word,
               afterWord: nextWord.word,
               segmentLength: currentSegment.length,
