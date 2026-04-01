@@ -163,6 +163,29 @@ def main():
                         entry["is_presenter"] = False
                         rms_filtered_count += 1
 
+                # Rescue trailing words: if a non-presenter word is immediately
+                # after a presenter word (gap < 100ms) and there's no presenter
+                # word after it for at least 500ms — presenter finishing a sentence.
+                rescued_count = 0
+                for idx in range(len(word_list) - 1):
+                    curr = word_list[idx]
+                    next_w = word_list[idx + 1]
+
+                    if curr["is_presenter"] and not next_w["is_presenter"]:
+                        gap = next_w["start"] - curr["end"]
+                        if gap < 0.1:  # 100ms — same speaker continuing
+                            # Check if there's a long silence after this word
+                            if idx + 2 >= len(word_list) or word_list[idx + 2]["start"] - next_w["end"] > 0.5:
+                                next_w["is_presenter"] = True
+                                rescued_count += 1
+
+                if rescued_count > 0:
+                    print(
+                        f"[merge] Trailing word rescue: {rescued_count} words restored as presenter",
+                        file=sys.stderr,
+                    )
+                    rms_filtered_count -= rescued_count
+
                 # Update counters
                 presenter_count -= rms_filtered_count
                 other_count += rms_filtered_count
