@@ -44,15 +44,28 @@ interface TakeDecision {
   kept_ids?: number[];
 }
 
+interface TakeCandidateAlternative {
+  ids: number[];
+  score: number;
+}
+
+interface TakeCandidate {
+  sentence_group: string;
+  best_take_ids: number[];
+  alternatives?: TakeCandidateAlternative[];
+}
+
 interface TakeDecisions {
   remove_ids: number[];
   decisions: TakeDecision[];
+  candidates?: TakeCandidate[];
   stats: {
     duplicates_found: number;
     false_starts: number;
     production_cues: number;
     stutters: number;
     abandoned_takes: number;
+    hard_rejections?: number;
     total_removed_words: number;
   };
   processing_time_ms: number;
@@ -89,9 +102,28 @@ function buildTakeSelectorHints(takeDecisions: TakeDecisions): string {
       case 'abandoned_take':
         lines.push(`- Abandoned take at words [${ids}] — presenter gave up on this version`);
         break;
+      case 'hard_reject':
+        lines.push(`- Hard rejected words [${ids}] — failed multiple quality checks (DO NOT use these words)`);
+        break;
     }
   }
   return lines.join('\n');
+}
+
+function buildCandidatesText(takeDecisions: TakeDecisions): string {
+  if (!takeDecisions.candidates || takeDecisions.candidates.length === 0) {
+    return 'No ranked candidates available.';
+  }
+
+  return takeDecisions.candidates.map((c, i) => {
+    const bestIds = c.best_take_ids.join(',');
+    const alts = c.alternatives?.map(a =>
+      `  Alternative: IDs [${a.ids.join(',')}] (score: ${a.score.toFixed(2)})`
+    ).join('\n') || '';
+    return `Sentence group ${i + 1}: "${c.sentence_group}"
+  BEST: IDs [${bestIds}]
+${alts}`;
+  }).join('\n\n');
 }
 
 interface KeepSegment {
@@ -263,7 +295,11 @@ function buildNumberedTextRaw(words: Word[]): string {
   return words.map((w) => `[${w.id}] ${w.word}`).join(' ');
 }
 
-function buildStructuredText(words: Word[], takeSelectorIds: Set<number>): string {
+function buildStructuredText(
+  words: Word[],
+  takeSelectorIds: Set<number>,
+  hardRejectedIds: Set<number>,
+): string {
   const parts: string[] = [];
   let takeNumber = 1;
 
@@ -272,6 +308,9 @@ function buildStructuredText(words: Word[], takeSelectorIds: Set<number>): strin
 
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!;
+
+    // Skip hard-rejected words entirely — AI never sees them
+    if (hardRejectedIds.has(w.id)) continue;
 
     let prefix = '';
     let suffix = '';
@@ -337,14 +376,13 @@ A 30-40 second video from 2.5 minutes of raw footage should have
 
 CRITICAL RULES:
 
-- ABSOLUTE RULE — STARRED WORDS:
-  This rule OVERRIDES "INCLUDE EVERYTHING".
-  NEVER include more than 1 starred word (*) in any single segment.
-  If a segment would require 2+ consecutive starred words to make sense,
-  SKIP that version and find a cleaner take elsewhere.
+- STARRED WORDS — STRONG PREFERENCE:
+  STRONGLY AVOID segments with 2+ consecutive starred words (*).
   Starred words are background voices — including them means the
   production assistant's voice will be heard in the final video.
-  ONE exception: a single isolated starred word between presenter words
+  If no clean alternative exists, you MAY include them as last resort,
+  but add 'starred_warning' to the reason field.
+  A single isolated starred word between presenter words
   may be included if it completes the sentence.
 
 - CHRONOLOGICAL ORDER: Selected segments MUST appear in the same order
@@ -373,14 +411,14 @@ CRITICAL RULES:
   (b) It's heavily stuttered/mumbled and no clean version exists
   (c) It's a production instruction ("סליחה", "עוד פעם", "סיימתי")
   If the presenter said it clearly at least once — it belongs in the video.
-  This rule does NOT override the starred words rule above.
+  The starred words preference still applies — avoid segments with 2+ starred words.
   Include everything the PRESENTER said, not everything in the transcript.
 
 - TAKE BREAKS: Never select IDs that cross a "--- TAKE N ---" boundary.
 
 - PREFER CLEAN WORDS: Avoid words marked with * (non-presenter)
-  and ~ (flagged by analysis). See ABSOLUTE RULE above — never
-  include 2+ starred words in a segment.
+  and ~ (flagged by analysis). Strongly avoid including
+  2+ consecutive starred words in a segment.
 
 - LAST TAKE IS BEST: When the same sentence appears in multiple takes,
   always prefer the highest take number (latest recording).
@@ -390,6 +428,12 @@ CRITICAL RULES:
   do not also select it from Take 3.
 
 {{TAKE_SELECTOR_HINTS}}
+
+RANKED CANDIDATES:
+For some sentences, the system identified multiple takes and ranked them.
+The best take is listed first. Use this ranking when choosing:
+
+{{CANDIDATES}}
 
 RETURN FORMAT:
 {
@@ -418,10 +462,13 @@ interface AIFinalReviewResult {
 async function runAINarrativeSelection(
   allWordsText: string,
   hints: string,
+  candidatesText: string,
   brain: AIBrain,
   logger: Logger,
 ): Promise<{ narrativeRanges: KeepRange[]; usage: AIUsage }> {
-  const prompt = NARRATIVE_PROMPT.replace('{{TAKE_SELECTOR_HINTS}}', hints);
+  const prompt = NARRATIVE_PROMPT
+    .replace('{{TAKE_SELECTOR_HINTS}}', hints)
+    .replace('{{CANDIDATES}}', candidatesText);
   const userPrompt = prompt + allWordsText;
 
   const aiConfig = loadConfig();
@@ -903,11 +950,26 @@ export async function runMergeAndClean(
   const takeDecisions = await runTakeSelector(jobDir, logger);
   const takeSelectorIds = new Set(takeDecisions.remove_ids);
 
+  // Build hard-rejected IDs set (words AI should never see)
+  const hardRejectedIds = new Set<number>();
+  for (const dec of takeDecisions.decisions) {
+    if (dec.reason === 'hard_reject') {
+      for (const id of dec.ids) {
+        hardRejectedIds.add(id);
+      }
+    }
+  }
+  logger.info('Hard rejected words (hidden from AI)', { count: hardRejectedIds.size });
+
   // Step 2: AI Step 1 — Select narrative from ALL words (with take selector hints)
-  const allWordsText = buildStructuredText(merged.words, takeSelectorIds);
+  const allWordsText = buildStructuredText(merged.words, takeSelectorIds, hardRejectedIds);
   const hints = buildTakeSelectorHints(takeDecisions);
-  logger.info('Take selector hints for AI', { hintCount: takeDecisions.decisions.length });
-  const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, brain, logger);
+  const candidatesText = buildCandidatesText(takeDecisions);
+  logger.info('Take selector hints for AI', {
+    hintCount: takeDecisions.decisions.length,
+    candidateGroups: takeDecisions.candidates?.length ?? 0,
+  });
+  const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger);
 
   // Step 2.5: Validate keep_ranges — remove fragments and log suspicious starts
   const validatedRanges = validateKeepRanges(narrativeRanges, merged.words, logger);

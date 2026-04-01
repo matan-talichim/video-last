@@ -644,6 +644,128 @@ def detect_internal_retakes(words, already_removed):
     return remove_ids, decisions
 
 
+def apply_hard_rejection(words, all_words, already_removed):
+    """
+    Hard reject entire segments that fail quality checks (2+ signals required).
+    These segments will be marked for removal and NOT sent to AI.
+    """
+    reject_ids = set()
+    decisions = []
+
+    active = [w for w in words if w['id'] not in already_removed]
+    takes = build_takes(active, already_removed)
+
+    for take in takes:
+        if not take:
+            continue
+        take_ids = [w['id'] for w in take]
+
+        # Count how many rejection signals this take has
+        signals = 0
+        signal_names = []
+
+        # SIGNAL 1: >40% of words are non-presenter
+        non_presenter = sum(1 for w in take if not w.get('is_presenter', True))
+        if len(take) > 0 and non_presenter / len(take) > 0.4:
+            signals += 1
+            signal_names.append('non_presenter')
+
+        # SIGNAL 2: speaker_score average < 0.45
+        scores = [w.get('speaker_score', 1.0) for w in take if 'speaker_score' in w]
+        if scores and sum(scores) / len(scores) < 0.45:
+            signals += 1
+            signal_names.append('low_speaker_score')
+
+        # SIGNAL 3: Incomplete ending (last word <= 2 chars + gap > 1s)
+        last_word = take[-1]
+        incomplete_ending = False
+        if len(last_word['word']) <= 2:
+            next_words = [w for w in all_words if w['start'] > last_word['end']]
+            if next_words and next_words[0]['start'] - last_word['end'] > 1.0:
+                incomplete_ending = True
+        if incomplete_ending:
+            signals += 1
+            signal_names.append('incomplete_ending')
+
+        # SIGNAL 4: Heavy stuttering (same word repeated consecutively)
+        word_texts = [w['word'] for w in take]
+        stutter_count = sum(1 for i in range(len(word_texts) - 1)
+                           if word_texts[i] == word_texts[i + 1])
+        if len(take) > 3 and stutter_count / len(take) > 0.2:
+            signals += 1
+            signal_names.append('heavy_stutter')
+
+        # Reject only if 2+ signals
+        if signals >= 2:
+            reject_ids.update(take_ids)
+            decisions.append({
+                'ids': sorted(take_ids),
+                'reason': 'hard_reject',
+                'signals': signal_names,
+            })
+            log(f"Hard reject: {len(take_ids)} words, signals: {signal_names}")
+
+    return reject_ids, decisions
+
+
+def build_ranked_candidates(words, all_words, already_removed, audio_data=None, sample_rate=16000):
+    """
+    For each unique sentence/idea, find all takes and rank them.
+    Returns top 3 candidates per sentence group.
+    """
+    active = [w for w in words if w['id'] not in already_removed
+              and w.get('is_presenter', True)]
+    takes = build_takes(active, already_removed)
+
+    if not takes:
+        return []
+
+    # Group similar takes
+    groups = find_similar_take_groups(takes, threshold=0.70, lookback_sec=999)
+
+    ranked = []
+    for group_indices in groups:
+        group_takes = [takes[i] for i in group_indices]
+        scored = []
+        for take in group_takes:
+            score = score_take(take, audio_data, sample_rate)
+
+            # Bonus: no starred words
+            starred = sum(1 for w in take if not w.get('is_presenter', True))
+            clean_bonus = 0.1 if starred == 0 else 0
+
+            # Bonus: complete sentence (last word > 2 chars)
+            last_word = take[-1]['word']
+            complete_bonus = 0.05 if len(last_word) > 2 else 0
+
+            total = score + clean_bonus + complete_bonus
+            scored.append((take, total))
+
+        # Sort by score descending, keep top 3
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        best_take = scored[0][0]
+        sentence_text = ' '.join(w['word'] for w in best_take[:6])
+        if len(best_take) > 6:
+            sentence_text += '...'
+
+        entry = {
+            'sentence_group': sentence_text,
+            'best_take_ids': [w['id'] for w in scored[0][0]],
+            'alternatives': [
+                {
+                    'ids': [w['id'] for w in take],
+                    'score': round(s, 2),
+                }
+                for take, s in scored[1:3]
+            ],
+        }
+        ranked.append(entry)
+
+    log(f"Ranked candidates: {len(ranked)} sentence groups")
+    return ranked
+
+
 def apply_coarticulation_protection(remove_ids, presenter_words, decisions):
     """
     CRITICAL rule 3: If gap between two consecutive words < 20ms,
@@ -878,7 +1000,13 @@ def main():
     for dec in all_decisions:
         all_remove_ids.update(dec["ids"])
 
-    # 6.5. Internal retake detection (within-take repeated phrases)
+    # 6.5. Hard rejection (requires 2+ signals to reject)
+    hard_reject_ids, hard_reject_decs = apply_hard_rejection(all_words, all_words, all_remove_ids)
+    all_remove_ids |= hard_reject_ids
+    all_decisions.extend(hard_reject_decs)
+    log(f"Hard rejections: {len(hard_reject_decs)} takes, {len(hard_reject_ids)} words")
+
+    # 6.7. Internal retake detection (within-take repeated phrases)
     internal_ids, internal_decs = detect_internal_retakes(all_words, all_remove_ids)
     all_remove_ids |= internal_ids
     all_decisions.extend(internal_decs)
@@ -909,6 +1037,9 @@ def main():
     # Ensure only presenter words remain in remove_ids after protections
     all_remove_ids &= presenter_ids
 
+    # 8.5. Build ranked candidates (for AI referee)
+    candidates = build_ranked_candidates(all_words, all_words, all_remove_ids, audio_data, sample_rate or 16000)
+
     # 9. Deduplicate and clean decisions (priority-based conflict resolution)
     all_decisions = deduplicate_decisions(all_decisions, all_remove_ids)
 
@@ -925,6 +1056,7 @@ def main():
         "stutters": reason_counts.get("stutter", 0),
         "abandoned_takes": reason_counts.get("abandoned_take", 0),
         "internal_retakes": reason_counts.get("internal_retake", 0),
+        "hard_rejections": reason_counts.get("hard_reject", 0),
         "total_removed_words": len(all_remove_ids),
     }
 
@@ -940,6 +1072,7 @@ def main():
     result = {
         "remove_ids": sorted(all_remove_ids),
         "decisions": all_decisions,
+        "candidates": candidates,
         "stats": stats,
         "processing_time_ms": processing_time_ms,
     }
