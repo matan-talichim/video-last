@@ -302,81 +302,94 @@ function buildStructuredText(words: Word[], takeSelectorIds: Set<number>): strin
 
 // ── AI Step 1: Narrative selection from ALL words ──
 
-const NARRATIVE_PROMPT = `You are a professional video editor. You receive a COMPLETE transcript of a raw video recording. The presenter recorded multiple takes of the same script.
+const NARRATIVE_PROMPT = `You are the world's best direct-response copywriter AND video editor combined.
 
-Your job: READ the entire transcript and BUILD the best possible marketing video by selecting the clearest, most fluent, and most complete version of each part of the message.
+You receive the COMPLETE transcript of a raw marketing video recording.
+The presenter recorded multiple takes of the same script. Your job:
+BUILD THE MOST COMPELLING MARKETING VIDEO POSSIBLE by selecting the
+strongest, clearest, most complete version of each part of the message.
 
-STEP 1 — UNDERSTAND THE MESSAGE:
-Read everything and identify the core marketing structure:
-Hook → Problem → Solution → Proof → CTA
+STEP 1 — READ AND MAP THE FULL MESSAGE:
+Read the entire transcript. Identify EVERY unique marketing idea/sentence.
+Map the complete sales structure:
+- HOOK: The opening that grabs attention (pain point, question, shocking stat)
+- PROBLEM: What the viewer is struggling with
+- SOLUTION: What you offer and how it works
+- MECHANISM: The specific process/method
+- PROOF/GUARANTEE: Why they should trust you
+- CTA: What to do next
 
-STEP 2 — FOR EACH PART, FIND ALL TAKES:
-The presenter said each part of the script multiple times. Identify all versions.
+DO NOT skip any part. A complete marketing video needs ALL parts.
 
-STEP 3 — SELECT THE BEST TAKE FOR EACH PART:
-Choose the version that is:
-- Most complete (full sentence, not cut off)
-- Most fluent (no stuttering, no hesitation)
-- Clearest words (well-articulated, confident delivery)
-- Last take is usually best (presenter improved over time)
+STEP 2 — FOR EACH PART, FIND THE BEST TAKE:
+The presenter said each part multiple times. For each part:
+- Find ALL versions in the transcript
+- Select the LAST (highest take number) complete version
+- Make sure it's a COMPLETE sentence (starts and ends properly)
 
-STEP 4 — VERIFY FLOW:
-Make sure your selected segments create a coherent, flowing video when played in sequence. The story should make sense from start to end.
+STEP 3 — BUILD THE FULL VIDEO:
+Select segments that cover the ENTIRE marketing message.
+Target: use 60-80% of available presenter words.
+If you're selecting less than 50% — you're cutting too much!
 
-UNDERSTANDING THE TRANSCRIPT FORMAT:
-
-The transcript uses these markers:
-- [id] word — regular presenter word (PREFER these)
-- *[id] word* — suspected non-presenter (background voice/crew) — AVOID these
-- ~[id] word~ — flagged by automated analysis (stutter/duplicate/cue) — AVOID these
-- --- TAKE N --- marks the start of take number N. Higher numbers = later recording = usually better. Prefer higher-numbered takes when choosing between similar versions.
+A 30-40 second video from 2.5 minutes of raw footage should have
+7-10 segments covering every part of the message.
 
 CRITICAL RULES:
 
-- NEVER select a range of IDs that crosses a TAKE marker.
-  Each segment must be entirely within one take section.
+- CHRONOLOGICAL ORDER: Selected segments MUST appear in the same order
+  as they were recorded. If segment A starts at second 20 and segment B
+  starts at second 50, A must come before B in your output.
+  NEVER put a later timestamp before an earlier one.
 
-- If the same sentence appears in two different take sections,
-  choose only the LAST (latest/highest-numbered) version — it is usually the best take.
+- COMPLETE SENTENCES: Every segment must start at the beginning of a
+  sentence and end at the end of a sentence. No fragments.
+  BAD: "לך שהחיסכון החודשי..." (starts mid-sentence)
+  GOOD: "ואם אני לא מראה לך שהחיסכון החודשי..."
 
-- PREFER segments with NO starred words (*) and NO tilde words (~).
-  Those are your cleanest takes.
+- FULL MESSAGE COVERAGE: Your selection must include:
+  * A hook (the opening)
+  * The problem statement
+  * The solution/what you offer
+  * How it works (mechanism)
+  * Proof or guarantee
+  * Call to action
+  If ANY of these is missing — go back and find it in the transcript.
 
-- A single starred word (*) between two presenter words in the SAME take
-  may be a false positive — use your judgment. But multiple consecutive
-  starred words are definitely non-presenter — never include those.
+- INCLUDE EVERYTHING: Every unique idea or sentence the presenter said
+  should be represented in your selection. Do NOT skip content just because
+  it's short or seems less important. The only reasons to skip a sentence are:
+  (a) It's a duplicate of something you already selected
+  (b) It's heavily stuttered/mumbled and no clean version exists
+  (c) It's a production instruction ("סליחה", "עוד פעם", "סיימתי")
+  If the presenter said it clearly at least once — it belongs in the video.
 
-RULES:
-- Return ONLY continuous sequences of word IDs
-- Never mix words from different takes
-- Each segment must be a complete sentence
-- Minimum 4 words per segment
-- CRITICAL: List EVERY SINGLE ID — do not skip numbers
-- Ignore production instructions ("סליחה", "עוד פעם", "סיימתי", "יופי", "מעולה", "אוקיי")
+- TAKE BREAKS: Never select IDs that cross a "--- TAKE N ---" boundary.
 
-- SELF-CHECK BEFORE RETURNING: For each segment in your keep_ranges,
-  verify:
-  1. Does the first word start a new thought? (NOT a continuation like "לך", "אותם", "ולא")
-  2. Does the last word complete a thought? (NOT a hanging word like "לא", "את", "ולא")
-  3. Does the segment make sense if read ALONE without any context?
-  If ANY check fails — fix the segment or remove it entirely.
+- PREFER CLEAN WORDS: Avoid words marked with * (non-presenter)
+  and ~ (flagged by analysis). But if including a starred word
+  completes an important sentence — include it.
 
-AUTOMATED ANALYSIS HINTS:
-The following issues were detected by automated analysis. Use these as
-HINTS — you don't have to follow them, but they are usually correct:
+- LAST TAKE IS BEST: When the same sentence appears in multiple takes,
+  always prefer the highest take number (latest recording).
+
+- NO DUPLICATES: Never include two versions of the same sentence.
+  If you already selected "פרויקט חד פעמי" from Take 7,
+  do not also select it from Take 3.
 
 {{TAKE_SELECTOR_HINTS}}
-
-These hints can help you avoid selecting segments that contain
-production instructions, stutters, or inferior duplicate takes.
 
 RETURN FORMAT:
 {
   "keep_ranges": [
-    { "ids": [50,51,52,53,54,55], "reason": "hook - clearest take" },
+    { "ids": [12,13,14,15,16,17,18,19,20,21,22,23,24], "reason": "HOOK — opening question about needing more employees" },
+    { "ids": [34,35,36,37,38,39,40,41,42,43], "reason": "PROBLEM — business built for manual work not growth" },
     ...
   ]
 }
+
+CRITICAL: List EVERY SINGLE ID in a chosen segment. Do not skip numbers.
+If the segment spans ID 40 to 50, output [40,41,42,43,44,45,46,47,48,49,50].
 
 Numbered text:
 `;
