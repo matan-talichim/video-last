@@ -260,6 +260,43 @@ function buildNumberedTextRaw(words: Word[]): string {
   return words.map((w) => `[${w.id}] ${w.word}`).join(' ');
 }
 
+function buildStructuredText(words: Word[], takeSelectorIds: Set<number>): string {
+  const parts: string[] = [];
+  let takeNumber = 1;
+
+  // Start with TAKE 1 header
+  parts.push(`--- TAKE ${takeNumber} ---\n`);
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!;
+
+    let prefix = '';
+    let suffix = '';
+
+    if (!w.is_presenter) {
+      prefix = '*';
+      suffix = '*';
+    } else if (takeSelectorIds.has(w.id)) {
+      prefix = '~';
+      suffix = '~';
+    }
+
+    parts.push(`${prefix}[${w.id}] ${w.word}${suffix}`);
+
+    // GAP marker between takes
+    if (i < words.length - 1) {
+      const next = words[i + 1]!;
+      const gap = next.start - w.end;
+      if (gap > 1.0) {
+        takeNumber++;
+        parts.push(`\n\n--- TAKE ${takeNumber} (${gap.toFixed(1)}s gap) ---\n`);
+      }
+    }
+  }
+
+  return parts.join(' ');
+}
+
 // ── AI Step 1: Narrative selection from ALL words ──
 
 const NARRATIVE_PROMPT = `You are a professional video editor. You receive a COMPLETE transcript of a raw video recording. The presenter recorded multiple takes of the same script.
@@ -282,6 +319,29 @@ Choose the version that is:
 
 STEP 4 — VERIFY FLOW:
 Make sure your selected segments create a coherent, flowing video when played in sequence. The story should make sense from start to end.
+
+UNDERSTANDING THE TRANSCRIPT FORMAT:
+
+The transcript uses these markers:
+- [id] word — regular presenter word (PREFER these)
+- *[id] word* — suspected non-presenter (background voice/crew) — AVOID these
+- ~[id] word~ — flagged by automated analysis (stutter/duplicate/cue) — AVOID these
+- --- TAKE N --- marks the start of take number N. Higher numbers = later recording = usually better. Prefer higher-numbered takes when choosing between similar versions.
+
+CRITICAL RULES:
+
+- NEVER select a range of IDs that crosses a TAKE marker.
+  Each segment must be entirely within one take section.
+
+- If the same sentence appears in two different take sections,
+  choose only the LAST (latest/highest-numbered) version — it is usually the best take.
+
+- PREFER segments with NO starred words (*) and NO tilde words (~).
+  Those are your cleanest takes.
+
+- A single starred word (*) between two presenter words in the SAME take
+  may be a false positive — use your judgment. But multiple consecutive
+  starred words are definitely non-presenter — never include those.
 
 RULES:
 - Return ONLY continuous sequences of word IDs
@@ -770,7 +830,7 @@ export async function runMergeAndClean(
   const takeSelectorIds = new Set(takeDecisions.remove_ids);
 
   // Step 2: AI Step 1 — Select narrative from ALL words (with take selector hints)
-  const allWordsText = buildNumberedTextRaw(merged.words);
+  const allWordsText = buildStructuredText(merged.words, takeSelectorIds);
   const hints = buildTakeSelectorHints(takeDecisions);
   logger.info('Take selector hints for AI', { hintCount: takeDecisions.decisions.length });
   const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, brain, logger);
