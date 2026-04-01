@@ -337,6 +337,16 @@ A 30-40 second video from 2.5 minutes of raw footage should have
 
 CRITICAL RULES:
 
+- ABSOLUTE RULE — STARRED WORDS:
+  This rule OVERRIDES "INCLUDE EVERYTHING".
+  NEVER include more than 1 starred word (*) in any single segment.
+  If a segment would require 2+ consecutive starred words to make sense,
+  SKIP that version and find a cleaner take elsewhere.
+  Starred words are background voices — including them means the
+  production assistant's voice will be heard in the final video.
+  ONE exception: a single isolated starred word between presenter words
+  may be included if it completes the sentence.
+
 - CHRONOLOGICAL ORDER: Selected segments MUST appear in the same order
   as they were recorded. If segment A starts at second 20 and segment B
   starts at second 50, A must come before B in your output.
@@ -363,12 +373,14 @@ CRITICAL RULES:
   (b) It's heavily stuttered/mumbled and no clean version exists
   (c) It's a production instruction ("סליחה", "עוד פעם", "סיימתי")
   If the presenter said it clearly at least once — it belongs in the video.
+  This rule does NOT override the starred words rule above.
+  Include everything the PRESENTER said, not everything in the transcript.
 
 - TAKE BREAKS: Never select IDs that cross a "--- TAKE N ---" boundary.
 
 - PREFER CLEAN WORDS: Avoid words marked with * (non-presenter)
-  and ~ (flagged by analysis). But if including a starred word
-  completes an important sentence — include it.
+  and ~ (flagged by analysis). See ABSOLUTE RULE above — never
+  include 2+ starred words in a segment.
 
 - LAST TAKE IS BEST: When the same sentence appears in multiple takes,
   always prefer the highest take number (latest recording).
