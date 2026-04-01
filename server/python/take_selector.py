@@ -162,8 +162,8 @@ def get_gap_after(word, next_word):
 
 def detect_micro_stutters(presenter_words):
     """
-    Section 4.3: Same string (1-3 chars), appears 2+ times consecutive,
-    gap < 200ms. Keep only last occurrence.
+    Detect any word repeated 2+ times consecutively with gap < 300ms.
+    Keep only the last occurrence.
     """
     decisions = []
     remove_ids = set()
@@ -173,18 +173,13 @@ def detect_micro_stutters(presenter_words):
         w = presenter_words[i]
         text = w["word"].strip()
 
-        # Only short words (1-3 chars)
-        if len(text) > 3:
-            i += 1
-            continue
-
         # Find consecutive identical words with small gap
         group = [w]
         j = i + 1
         while j < len(presenter_words):
             nw = presenter_words[j]
             gap_ms = (nw["start"] - group[-1]["end"]) * 1000.0
-            if nw["word"].strip() == text and gap_ms < 200:
+            if nw["word"].strip() == text and gap_ms < 300:
                 group.append(nw)
                 j += 1
             else:

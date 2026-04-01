@@ -351,6 +351,13 @@ RULES:
 - CRITICAL: List EVERY SINGLE ID — do not skip numbers
 - Ignore production instructions ("סליחה", "עוד פעם", "סיימתי", "יופי", "מעולה", "אוקיי")
 
+- SELF-CHECK BEFORE RETURNING: For each segment in your keep_ranges,
+  verify:
+  1. Does the first word start a new thought? (NOT a continuation like "לך", "אותם", "ולא")
+  2. Does the last word complete a thought? (NOT a hanging word like "לא", "את", "ולא")
+  3. Does the segment make sense if read ALONE without any context?
+  If ANY check fails — fix the segment or remove it entirely.
+
 AUTOMATED ANALYSIS HINTS:
 The following issues were detected by automated analysis. Use these as
 HINTS — you don't have to follow them, but they are usually correct:
@@ -711,6 +718,45 @@ async function runSemanticCleanup(
   return { cleanResult: data, usage };
 }
 
+// ── Validation: ensure keep_ranges are complete sentences ──
+
+function validateKeepRanges(
+  keepRanges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+): KeepRange[] {
+  const wordsMap = new Map<number, Word>();
+  for (const w of words) {
+    wordsMap.set(w.id, w);
+  }
+
+  return keepRanges.filter(range => {
+    if (range.ids.length < 4) {
+      logger.warn('Removing fragment: less than 4 words', { ids: range.ids });
+      return false;
+    }
+
+    // Check: does it start mid-sentence?
+    const firstWord = wordsMap.get(range.ids[0]!);
+    if (firstWord) {
+      const prevId = range.ids[0]! - 1;
+      const prevWord = wordsMap.get(prevId);
+      if (prevWord) {
+        const gap = firstWord.start - prevWord.end;
+        if (gap < 0.3) {
+          logger.warn('Suspicious segment start: very close to previous word', {
+            firstWord: firstWord.word,
+            prevWord: prevWord.word,
+            gap,
+          });
+        }
+      }
+    }
+
+    return true;
+  });
+}
+
 // ── Step 3: Build keep/remove segments from words ──
 
 function buildSegments(
@@ -835,8 +881,16 @@ export async function runMergeAndClean(
   logger.info('Take selector hints for AI', { hintCount: takeDecisions.decisions.length });
   const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, brain, logger);
 
+  // Step 2.5: Validate keep_ranges — remove fragments and log suspicious starts
+  const validatedRanges = validateKeepRanges(narrativeRanges, merged.words, logger);
+  logger.info('Validation completed', {
+    before: narrativeRanges.length,
+    after: validatedRanges.length,
+    removed: narrativeRanges.length - validatedRanges.length,
+  });
+
   // Step 3: Cross-reference with presenter detection
-  const flaggedRanges = crossReferencePresenter(narrativeRanges, merged.words, logger);
+  const flaggedRanges = crossReferencePresenter(validatedRanges, merged.words, logger);
 
   // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
   const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
