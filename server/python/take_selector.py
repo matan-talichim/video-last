@@ -230,6 +230,7 @@ def detect_micro_stutters(presenter_words):
         while j < len(presenter_words):
             nw = presenter_words[j]
             gap_ms = (nw["start"] - group[-1]["end"]) * 1000.0
+            print(f"[stutter] Checking [{w['id']}] '{w['word']}' vs [{nw['id']}] '{nw['word']}' gap={gap_ms:.0f}ms", file=sys.stderr)
             if nw["word"].strip() == text and gap_ms < 300:
                 group.append(nw)
                 j += 1
@@ -245,6 +246,7 @@ def detect_micro_stutters(presenter_words):
                 "reason": "stutter",
                 "kept_ids": [group[-1]["id"]],
             })
+            print(f"[stutter] Found group: ids={[g['id'] for g in group]} word='{text}', removing={to_remove}, next i={j}", file=sys.stderr)
 
         i = j if len(group) >= 2 else i + 1
 
