@@ -262,11 +262,10 @@ export async function runEditAssembly(
         duration: segDuration,
       });
 
-      // Build audio filter chain: denoise → fade-in → fade-out
-      const denoise = 'afftdn=nf=-20:tn=1:om=o';
+      // Build audio fade filter: fade-in 30ms at start, fade-out 30ms at end
       const fadeIn = `afade=t=in:st=0:d=${DEFAULT_FADE_DURATION}`;
       const fadeOut = `afade=t=out:st=${Math.max(0, segDuration - DEFAULT_FADE_DURATION)}:d=${DEFAULT_FADE_DURATION}`;
-      const audioFilter = `${denoise},${fadeIn},${fadeOut}`;
+      const audioFilter = `${fadeIn},${fadeOut}`;
 
       // Use original fps (fallback to 30)
       const fps = mediaInfo.fps > 0 ? Math.round(mediaInfo.fps) : 30;

@@ -36,11 +36,11 @@
   },
   "ai": {
     "defaultBrain": "claude_sonnet_4_6",
-    "timeout": 600000,
+    "timeout": 60000,
     "maxTokens": 4096
   },
   "analysis": {
-    "timeout": 600000,
+    "timeout": 120000,
     "maxFrames": 20,
     "maxTokens": 8192
   },
@@ -57,8 +57,7 @@
     "lipThreshold": 0.25,
     "vadThreshold": 0.75,
     "buffer": 0.1,
-    "pythonPath": "python3",
-    "speakerVerify": true
+    "pythonPath": "python3"
   },
   "editAssembly": {
     "paddingStart": 0.03,
