@@ -186,7 +186,7 @@ def main():
         word_list[i]['take_id'] = take_id
         if i < len(word_list) - 1:
             gap = word_list[i + 1]['start'] - word_list[i]['end']
-            if gap > 1.0:
+            if gap > 0.3:
                 take_id += 1
 
     print(f"[merge] Assigned {take_id + 1} takes before chronological sort", file=sys.stderr)
