@@ -1097,22 +1097,86 @@ function validateKeepRanges(
   words: Word[],
   logger: Logger,
 ): KeepRange[] {
-  const wordsMap = new Map<number, Word>();
+  const wordMap = new Map<number, Word>();
   for (const w of words) {
-    wordsMap.set(w.id, w);
+    wordMap.set(w.id, w);
   }
 
   return keepRanges.filter(range => {
-    if (range.ids.length < 4) {
-      logger.warn('Removing fragment: less than 4 words', { ids: range.ids });
+    if (range.ids.length < 6) {
+      logger.warn('Removing fragment: less than 6 words', { ids: range.ids });
       return false;
     }
 
+    // ── Check forbidden first words ──
+    const FORBIDDEN_STARTS = new Set([
+      'זמן', 'וכסף', 'ידנית', 'שלך', 'לך', 'שהחיסכון', 'פרטים', 'בחינם',
+      'מחליף', 'והופכים', 'אותם', 'ולא', 'ובלי', 'שגונבים', 'ומחכה', 'ואם',
+      'שיהיה', 'של', 'עם', 'גם', 'כי', 'אבל', 'רק', 'עוד',
+    ]);
+
+    const firstWordId = range.ids[0];
+    const firstWord = wordMap.get(firstWordId!);
+    if (firstWord) {
+      const firstText = firstWord.word.trim();
+      // Check exact match OR starts with ש/ו/ב/ל prefix + 3+ chars (Hebrew prefix pattern)
+      const startsWithPrefix = firstText.length >= 4 && ['ש', 'ו', 'ב', 'ל', 'מ', 'כ'].includes(firstText[0]!)
+        && !['שלום', 'שאלה', 'לקוח', 'לקוחות', 'מאחורי', 'מערכת', 'מערכות', 'בנוי', 'בינה', 'כלים', 'לומד'].includes(firstText);
+
+      if (FORBIDDEN_STARTS.has(firstText) || startsWithPrefix) {
+        logger.warn('Removing segment: starts with forbidden word', {
+          word: firstText,
+          ids: range.ids,
+        });
+        return false;
+      }
+    }
+
+    // ── Check bad ending words ──
+    const BAD_ENDS = new Set([
+      'לא', 'את', 'של', 'עם', 'גם', 'כי', 'אם', 'או', 'הוא', 'היא',
+      'זה', 'אני', 'אתה', 'על', 'בלי', 'עוד', 'רק', 'כל', 'מה',
+    ]);
+
+    const lastWordId = range.ids[range.ids.length - 1];
+    const lastWord = wordMap.get(lastWordId!);
+    if (lastWord && BAD_ENDS.has(lastWord.word.trim())) {
+      // Trim the bad ending word instead of removing the whole segment
+      const trimmedIds = range.ids.slice(0, -1);
+      if (trimmedIds.length >= 6) {
+        logger.info('Trimmed bad ending word', {
+          word: lastWord.word.trim(),
+          originalLength: range.ids.length,
+          newLength: trimmedIds.length,
+        });
+        range.ids = trimmedIds;
+        // Check again — maybe the new last word is also bad
+        const newLastId = trimmedIds[trimmedIds.length - 1];
+        const newLastWord = wordMap.get(newLastId!);
+        if (newLastWord && BAD_ENDS.has(newLastWord.word.trim())) {
+          range.ids = trimmedIds.slice(0, -1);
+          logger.info('Trimmed second bad ending word', {
+            word: newLastWord.word.trim(),
+          });
+        }
+        // If after trimming < 6 words, remove entirely
+        if (range.ids.length < 6) {
+          logger.warn('Removing segment: too short after trimming bad end', { ids: range.ids });
+          return false;
+        }
+      } else {
+        logger.warn('Removing segment: bad ending and too short to trim', {
+          word: lastWord.word.trim(),
+          ids: range.ids,
+        });
+        return false;
+      }
+    }
+
     // Check: does it start mid-sentence?
-    const firstWord = wordsMap.get(range.ids[0]!);
     if (firstWord) {
       const prevId = range.ids[0]! - 1;
-      const prevWord = wordsMap.get(prevId);
+      const prevWord = wordMap.get(prevId);
       if (prevWord) {
         const gap = firstWord.start - prevWord.end;
         if (gap < 0.3) {
@@ -1507,6 +1571,99 @@ function buildSegments(
   return { keepSegments, removeSegments };
 }
 
+/**
+ * Step 2.85: Find and remove repeated phrases BETWEEN consecutive segments.
+ * If the same 3+ word phrase appears at the end of one segment and
+ * the start of the next — trim it from one of them.
+ */
+function deduplicateBetweenSegments(
+  ranges: KeepRange[],
+  words: Word[],
+  logger?: Logger,
+): KeepRange[] {
+  if (ranges.length < 2) return ranges;
+
+  const wordMap = new Map(words.map(w => [w.id, w]));
+
+  const getWordsText = (ids: number[]): string[] =>
+    ids.map(id => wordMap.get(id)?.word?.trim() || '').filter(Boolean);
+
+  let totalTrimmed = 0;
+
+  for (let i = 0; i < ranges.length - 1; i++) {
+    const currentWords = getWordsText(ranges[i]!.ids);
+    const nextWords = getWordsText(ranges[i + 1]!.ids);
+
+    if (currentWords.length < 3 || nextWords.length < 3) continue;
+
+    // Check if last N words of current match first N words of next (exact)
+    for (let matchLen = Math.min(5, currentWords.length, nextWords.length); matchLen >= 2; matchLen--) {
+      const currentTail = currentWords.slice(-matchLen).join(' ');
+      const nextHead = nextWords.slice(0, matchLen).join(' ');
+
+      if (currentTail === nextHead) {
+        // Remove the duplicate from the END of current segment
+        ranges[i]!.ids = ranges[i]!.ids.slice(0, -matchLen);
+        logger?.info('Removed cross-segment exact duplicate', {
+          phrase: currentTail,
+          fromSegment: i + 1,
+          wordsRemoved: matchLen,
+        });
+        totalTrimmed += matchLen;
+        break;
+      }
+    }
+
+    // Check for shared 3-gram anywhere in consecutive segments
+    if (currentWords.length >= 3 && nextWords.length >= 3) {
+      const currentTrigrams = new Set<string>();
+      for (let k = 0; k < currentWords.length - 2; k++) {
+        currentTrigrams.add(currentWords.slice(k, k + 3).join(' '));
+      }
+
+      for (let k = 0; k < nextWords.length - 2; k++) {
+        const nextTrigram = nextWords.slice(k, k + 3).join(' ');
+        if (currentTrigrams.has(nextTrigram)) {
+          // Found shared trigram — trim it from the START of next segment
+          const trimStart = k;
+          const trimEnd = k + 3;
+
+          // Only trim if it's at the beginning of the next segment (within first 4 words)
+          if (trimStart <= 1) {
+            ranges[i + 1]!.ids = ranges[i + 1]!.ids.slice(trimEnd);
+            logger?.info('Removed cross-segment trigram duplicate', {
+              phrase: nextTrigram,
+              fromSegment: i + 2,
+              wordsRemoved: 3,
+            });
+            totalTrimmed += 3;
+          }
+          break; // Only handle first match per pair
+        }
+      }
+    }
+  }
+
+  // Remove segments that became too short after trimming
+  const filtered = ranges.filter(r => {
+    if (r.ids.length < 6) {
+      logger?.warn('Removing segment: too short after cross-segment dedup', { ids: r.ids });
+      return false;
+    }
+    return true;
+  });
+
+  if (totalTrimmed > 0) {
+    logger?.info('deduplicateBetweenSegments', {
+      before: ranges.length,
+      after: filtered.length,
+      totalWordsTrimmed: totalTrimmed,
+    });
+  }
+
+  return filtered;
+}
+
 // ── Main exported function ──────────────────────
 
 export async function runMergeAndClean(
@@ -1654,8 +1811,11 @@ Respond with ONLY a valid JSON object. No text before or after.
   // Step 2.8: Deduplicate repeated phrases within segments
   const dedupedRanges = deduplicateWithinSegments(starredEnforced, merged.words, logger);
 
+  // Step 2.85: Remove repeated phrases between consecutive segments
+  const crossDedupedRanges = deduplicateBetweenSegments(dedupedRanges, merged.words, logger);
+
   // Step 2.9: Trim duplicate edge words (e.g. stray word from previous sentence)
-  const trimmedRanges = trimDuplicateEdges(dedupedRanges, merged.words, logger);
+  const trimmedRanges = trimDuplicateEdges(crossDedupedRanges, merged.words, logger);
 
   // Step 3: Cross-reference with presenter detection
   const flaggedRanges = crossReferencePresenter(trimmedRanges, merged.words, logger);
