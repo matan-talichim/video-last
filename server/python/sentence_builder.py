@@ -32,6 +32,10 @@ SENTENCE_OPENERS = {
     "בוא", "בואו", "היום", "כדי", "לכן", "עכשיו",
     "ברגע", "תחשוב", "תחשבו", "אז", "הבעיה", "הפתרון",
     "במקום", "בגלל", "השאלה", "התשובה", "המטרה",
+    "התוצאה", "הדבר", "הסיבה", "היתרון", "החיסרון",
+    "הרעיון", "המערכת", "הכלי", "השיטה", "הנקודה",
+    "למעשה", "בעצם", "בסופו", "לדוגמה", "כלומר",
+    "אחרי", "לפני", "מעבר", "בנוסף", "לסיכום",
 }
 
 # Words that indicate an incomplete sentence ending
@@ -44,8 +48,11 @@ INCOMPLETE_ENDINGS = {
 # Minimum words per sentence
 MIN_SENTENCE_WORDS = 4
 
-# Gap threshold (seconds) for sentence splitting within a take
+# Gap threshold (seconds) for sentence splitting within a take (requires opener)
 SENTENCE_GAP_THRESHOLD = 0.15
+
+# Large gap threshold — always split regardless of opener
+LARGE_GAP_THRESHOLD = 0.5
 
 # Dedup similarity threshold — only near-identical sentences are removed
 DEDUP_SIMILARITY_THRESHOLD = 0.85
@@ -112,14 +119,17 @@ def split_take_to_sentences(take_words):
     current = []
 
     for i, word in enumerate(take_words):
-        # Start new sentence if:
-        # 1. Current has enough words AND
-        # 2. This word is a sentence opener AND
-        # 3. Gap from previous word > threshold
+        # Start new sentence if current has enough words AND either:
+        # a) Large gap (>0.5s) — always split (clear pause)
+        # b) Sentence opener + small gap (>0.15s)
         if current and len(current) >= MIN_SENTENCE_WORDS:
             gap = (word["start"] - take_words[i - 1]["end"]) if i > 0 else 0
             word_text = word["word"].strip()
-            if word_text in SENTENCE_OPENERS and gap > SENTENCE_GAP_THRESHOLD:
+            should_split = (
+                gap > LARGE_GAP_THRESHOLD
+                or (word_text in SENTENCE_OPENERS and gap > SENTENCE_GAP_THRESHOLD)
+            )
+            if should_split:
                 sentences.append(current)
                 current = []
 
