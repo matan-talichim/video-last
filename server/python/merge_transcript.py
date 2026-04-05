@@ -180,6 +180,17 @@ def main():
 
     word_list = score_all_words(word_list, segments)
 
+    # Before sorting: assign take_id based on gaps in ORIGINAL order
+    take_id = 0
+    for i in range(len(word_list)):
+        word_list[i]['take_id'] = take_id
+        if i < len(word_list) - 1:
+            gap = word_list[i + 1]['start'] - word_list[i]['end']
+            if gap > 1.0:
+                take_id += 1
+
+    print(f"[merge] Assigned {take_id + 1} takes before chronological sort", file=sys.stderr)
+
     # Sort words chronologically and re-assign IDs
     word_list.sort(key=lambda w: w['start'])
     for i, w in enumerate(word_list):

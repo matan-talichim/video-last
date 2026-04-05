@@ -215,24 +215,44 @@ def detect_micro_stutters(presenter_words):
     """
     Detect any word repeated 2+ times consecutively with gap < 300ms.
     Keep only the last occurrence.
+    Allows skipping up to 1 non-matching word between repetitions
+    (handles cases where chronological sort inserted a word between stutters).
     """
     decisions = []
     remove_ids = set()
+    consumed = set()  # track indices already consumed in a stutter group
     i = 0
 
     while i < len(presenter_words):
+        if i in consumed:
+            i += 1
+            continue
+
         w = presenter_words[i]
         text = w["word"].strip()
 
-        # Find consecutive identical words with small gap
+        # Find consecutive identical words with small gap, allowing 1 skip
         group = [w]
+        group_indices = [i]
         j = i + 1
+        skipped = []  # track skipped words (non-matching but within gap)
+
         while j < len(presenter_words):
             nw = presenter_words[j]
             gap_ms = (nw["start"] - group[-1]["end"]) * 1000.0
             print(f"[stutter] Checking [{w['id']}] '{w['word']}' vs [{nw['id']}] '{nw['word']}' gap={gap_ms:.0f}ms", file=sys.stderr)
-            if nw["word"].strip() == text and gap_ms < 300:
+
+            if gap_ms >= 300:
+                break  # too far apart, stop looking
+
+            if nw["word"].strip() == text:
                 group.append(nw)
+                group_indices.append(j)
+                j += 1
+                skipped = []  # reset skip counter after a match
+            elif len(skipped) < 1:
+                # Allow skipping 1 non-matching word within gap
+                skipped.append(j)
                 j += 1
             else:
                 break
@@ -241,14 +261,16 @@ def detect_micro_stutters(presenter_words):
             # Keep only last occurrence
             to_remove = [g["id"] for g in group[:-1]]
             remove_ids.update(to_remove)
+            consumed.update(group_indices)
             decisions.append({
                 "ids": to_remove,
                 "reason": "stutter",
                 "kept_ids": [group[-1]["id"]],
             })
             print(f"[stutter] Found group: ids={[g['id'] for g in group]} word='{text}', removing={to_remove}, next i={j}", file=sys.stderr)
-
-        i = j if len(group) >= 2 else i + 1
+            i = j
+        else:
+            i += 1
 
     return remove_ids, decisions
 
