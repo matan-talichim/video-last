@@ -204,7 +204,7 @@ async function runMerge(
   logger.info('Running merge_transcript.py', { transcriptPath, segmentsPath, audioPath, speakerVerify });
 
   const { stdout, stderr } = await execFileAsync(pythonPath, args, {
-    timeout: speakerVerify ? 120000 : 30000,
+    timeout: speakerVerify ? 600000 : 30000,
   });
 
   if (stderr) {
@@ -254,7 +254,7 @@ async function runAlignWords(
 
   try {
     const { stdout, stderr } = await execFileAsync(pythonPath, args, {
-      timeout: 120000,
+      timeout: 600000,
     });
 
     if (stderr) {
@@ -328,7 +328,7 @@ async function runTakeSelector(
   logger.info('Running take_selector.py', { mergedPath, audioPath });
 
   const { stdout, stderr } = await execFileAsync(pythonPath, args, {
-    timeout: 60000,
+    timeout: 600000,
   });
 
   if (stderr) {
@@ -495,6 +495,13 @@ CRITICAL RULES:
   ✗ "שהחיסכון..." (starts with ש' prefix)
   ✗ "לך שהחיסכון..." (starts mid-sentence)
 
+  FORBIDDEN FIRST WORDS — NEVER start a segment with any of these
+  Hebrew connector/function words (they are ALWAYS mid-sentence):
+  זמן, וכסף, ידנית, שלך, לך, שהחיסכון, פרטים, בחינם, מחליף,
+  והופכים, אותם, ולא, ובלי, שגונבים, ומחכה, ואם, שיהיה
+  If your segment starts with one of these — extend backward to include
+  the sentence start, or remove the segment entirely.
+
   BAD ends (fragments — NEVER end a segment with these):
   ✗ "...המערכת לא" (hanging "לא")
   ✗ "...מחליף את" (hanging "את")
@@ -579,11 +586,12 @@ async function runAINarrativeSelection(
   candidatesText: string,
   brain: AIBrain,
   logger: Logger,
+  retryPreamble?: string,
 ): Promise<{ narrativeRanges: KeepRange[]; usage: AIUsage }> {
   const prompt = NARRATIVE_PROMPT
     .replace('{{TAKE_SELECTOR_HINTS}}', hints)
     .replace('{{CANDIDATES}}', candidatesText);
-  const userPrompt = prompt + allWordsText;
+  const userPrompt = (retryPreamble ? retryPreamble + '\n\n' : '') + prompt + allWordsText;
 
   const aiConfig = loadConfig();
   const aiSettings = (aiConfig as unknown as Record<string, unknown>).ai as
@@ -1189,6 +1197,59 @@ function deduplicateWithinSegments(
   return result;
 }
 
+// ── Trim duplicate edge words (e.g. "ידנית" from previous sentence leaking into next segment) ──
+
+function trimDuplicateEdges(
+  keepRanges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+): KeepRange[] {
+  const wordsMap = new Map<number, Word>();
+  for (const w of words) {
+    wordsMap.set(w.id, w);
+  }
+
+  const result: KeepRange[] = [];
+
+  for (const range of keepRanges) {
+    const rangeWords = range.ids
+      .map(id => wordsMap.get(id))
+      .filter((w): w is Word => w !== undefined);
+
+    if (rangeWords.length < 5) {
+      result.push(range);
+      continue;
+    }
+
+    // Check: does the first word appear again later in the segment?
+    const firstWordText = rangeWords[0]!.word;
+    const laterIndex = rangeWords.findIndex((w, i) => i > 2 && w.word === firstWordText);
+
+    if (laterIndex > 0 && laterIndex < rangeWords.length - 3) {
+      // The first word is a stray from the previous sentence — trim it
+      const newIds = range.ids.slice(1);
+      if (newIds.length >= 4) {
+        logger.info('trimDuplicateEdges: removed stray first word', {
+          removedWord: firstWordText,
+          originalLength: range.ids.length,
+          newLength: newIds.length,
+        });
+        result.push({ ids: newIds, reason: range.reason + ' [trimmed duplicate edge]' });
+        continue;
+      }
+    }
+
+    result.push(range);
+  }
+
+  logger.info('trimDuplicateEdges', {
+    before: keepRanges.length,
+    after: result.length,
+  });
+
+  return result;
+}
+
 // ── Step 3: Build keep/remove segments from words ──
 
 function buildSegments(
@@ -1329,7 +1390,46 @@ export async function runMergeAndClean(
     hintCount: takeDecisions.decisions.length,
     candidateGroups: takeDecisions.candidates?.length ?? 0,
   });
-  const { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger);
+  let { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger);
+
+  // Step 2.4: Coverage retry — if below 55%, re-run AI with stronger instruction
+  const presenterWords = merged.words.filter(w => w.is_presenter && !hardRejectedIds.has(w.id));
+  const initialSelectedIds = new Set(narrativeRanges.flatMap(r => r.ids));
+  const initialSelectedPresenter = presenterWords.filter(w => initialSelectedIds.has(w.id)).length;
+  const initialCoverage = presenterWords.length > 0 ? initialSelectedPresenter / presenterWords.length : 1;
+
+  if (initialCoverage < 0.55 && presenterWords.length > 0) {
+    logger.warn('Coverage too low after AI Step 1, re-running with stronger instruction', {
+      coverage: `${(initialCoverage * 100).toFixed(0)}%`,
+      selected: initialSelectedPresenter,
+      presenter: presenterWords.length,
+    });
+
+    const retryPreamble = `Your previous selection covered only ${Math.round(initialCoverage * 100)}% of presenter words.
+This is below the 55% minimum. You MUST add more segments.
+
+MISSING PARTS CHECK — verify each one:
+- Hook/opening question
+- Problem statement
+- Solution description
+- How it works (process)
+- Result/guarantee
+- Call to action
+
+Add segments for any missing part. Target: at least ${Math.ceil(presenterWords.length * 0.6)} words.`;
+
+    const retry = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger, retryPreamble);
+    narrativeRanges = retry.narrativeRanges;
+    usage1 = {
+      inputTokens: usage1.inputTokens + retry.usage.inputTokens,
+      outputTokens: usage1.outputTokens + retry.usage.outputTokens,
+      estimatedCostUSD: usage1.estimatedCostUSD + retry.usage.estimatedCostUSD,
+    };
+
+    const retrySelectedIds = new Set(narrativeRanges.flatMap(r => r.ids));
+    const retryCoverage = presenterWords.filter(w => retrySelectedIds.has(w.id)).length / presenterWords.length;
+    logger.info('Coverage after retry', { coverage: `${(retryCoverage * 100).toFixed(0)}%` });
+  }
 
   // Step 2.5: Validate keep_ranges — remove fragments and log suspicious starts
   const validatedRanges = validateKeepRanges(narrativeRanges, merged.words, logger);
@@ -1348,8 +1448,11 @@ export async function runMergeAndClean(
   // Step 2.8: Deduplicate repeated phrases within segments
   const dedupedRanges = deduplicateWithinSegments(starredEnforced, merged.words, logger);
 
+  // Step 2.9: Trim duplicate edge words (e.g. stray word from previous sentence)
+  const trimmedRanges = trimDuplicateEdges(dedupedRanges, merged.words, logger);
+
   // Step 3: Cross-reference with presenter detection
-  const flaggedRanges = crossReferencePresenter(dedupedRanges, merged.words, logger);
+  const flaggedRanges = crossReferencePresenter(trimmedRanges, merged.words, logger);
 
   // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
   const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
