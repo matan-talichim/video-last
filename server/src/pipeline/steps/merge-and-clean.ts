@@ -27,6 +27,7 @@ interface Word {
   speaker_score?: number;
   asr_score?: number;
   energy_score?: number;
+  take_id?: number;
 }
 
 interface MergedTranscript {
@@ -400,11 +401,14 @@ function buildStructuredText(
 
     parts.push(`${prefix}[${w.id}] ${w.word}${suffix}`);
 
-    // GAP marker between takes
+    // GAP marker between takes — use take_id if available, fallback to time gap
     if (i < words.length - 1) {
       const next = words[i + 1]!;
       const gap = next.start - w.end;
-      if (gap > 1.0) {
+      const differentTake = w.take_id !== undefined && next.take_id !== undefined
+        && w.take_id !== next.take_id;
+
+      if (differentTake || gap > 1.0) {
         takeNumber++;
         parts.push(`\n\n--- TAKE ${takeNumber} (${gap.toFixed(1)}s gap) ---\n`);
       }
@@ -443,10 +447,13 @@ The presenter said each part multiple times. For each part:
 
 STEP 3 — BUILD THE FULL VIDEO:
 Select segments that cover the ENTIRE marketing message.
-COVERAGE TARGET: You MUST select at least 60% of available presenter words.
-If your selection is below 60%, go back and add more segments.
-Count: if there are 170 presenter words, select at least 102.
-If you're selecting less than 50% — you're cutting too much!
+MOST IMPORTANT RULE — MINIMUM COVERAGE:
+Count the presenter words available (non-starred, non-flagged).
+You MUST select at least 55% of them. If your selection is below
+55% — you are cutting too much content. Go back and add more
+segments until you reach at least 55%.
+Count: if there are 170 presenter words, select at least 94.
+If you're selecting less than 50% — you're cutting WAY too much!
 
 MISSING PARTS CHECK: Before returning, verify you have:
 ✓ Hook (opening)
@@ -976,20 +983,18 @@ function splitRangesAtTakeBreaks(
         const nextWord = wordsMap.get(nextId);
 
         if (currentWord && nextWord) {
-          const gap = nextWord.start - currentWord.end;
-          const idGap = nextId - id;
-          let shouldSplit = false;
+          // Split if different takes OR time gap > 1s
+          const differentTake = currentWord.take_id !== undefined
+            && nextWord.take_id !== undefined
+            && currentWord.take_id !== nextWord.take_id;
+          const timeGap = nextWord.start - currentWord.end > 1.0;
 
-          // Split on time gap > 1.0s
-          if (gap > 1.0) shouldSplit = true;
-
-          // Split on ID gap > 3 (skipped words = different take)
-          if (idGap > 3) shouldSplit = true;
-
-          if (shouldSplit) {
+          if (differentTake || timeGap) {
             logger.warn('Splitting range at take break', {
-              gap,
-              idGap,
+              differentTake,
+              timeGap: nextWord.start - currentWord.end,
+              takeCurrent: currentWord.take_id,
+              takeNext: nextWord.take_id,
               beforeWord: currentWord.word,
               afterWord: nextWord.word,
               segmentLength: currentSegment.length,
@@ -1393,6 +1398,26 @@ export async function runMergeAndClean(
   const keptWords = merged.words.filter((w) => keepIdSet.has(w.id));
   const flaggedSegmentCount = flaggedRanges.filter((r) => r.flagged).length;
   const aiCalls = usage2.inputTokens > 0 ? 2 : 1;
+
+  // Coverage validation
+  const presenterWordCount = merged.words.filter((w) => w.is_presenter).length;
+  if (presenterWordCount > 0) {
+    const coverage = selectedByAI / presenterWordCount;
+    if (coverage < 0.50) {
+      logger.warn('AI coverage too low, consider re-running', {
+        selected: selectedByAI,
+        presenter: presenterWordCount,
+        coverage: `${(coverage * 100).toFixed(0)}%`,
+        target: '55-80%',
+      });
+    } else {
+      logger.info('AI coverage', {
+        selected: selectedByAI,
+        presenter: presenterWordCount,
+        coverage: `${(coverage * 100).toFixed(0)}%`,
+      });
+    }
+  }
 
   // Build final output
   const cleanedTranscript = {
