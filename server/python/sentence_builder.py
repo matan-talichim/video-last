@@ -72,20 +72,31 @@ def log(msg):
 
 # ── Step 1: Filter ────────────────────────────────────
 
-def filter_words(words, remove_ids):
+def filter_words(words, take_decisions):
     """
-    Remove words that are:
-    - in take_decisions.remove_ids (stutters, cues, duplicates)
-    - final_decision == 'reject' (non-presenter)
-    Keep: presenter + uncertain words.
+    MINIMAL filtering — only remove:
+    1. Stutters (repeated words)
+    2. Production cues ("סליחה", "עוד פעם")
+    3. Abandoned takes
+
+    DO NOT remove:
+    - duplicate_take words (dedup happens at sentence level)
+    - rejected words (they might be presenter with low score)
     """
-    clean = [
-        w for w in words
-        if w["id"] not in remove_ids
-        and w.get("final_decision") != "reject"
-    ]
+    remove_ids = set()
+
+    for decision in take_decisions.get('decisions', []):
+        reason = decision.get('reason', '')
+        if reason in ('stutter', 'production_cue', 'abandoned_take'):
+            remove_ids.update(decision.get('ids', []))
+
+    # Keep all words except stutters and cues
+    # Also keep uncertain and rejected — let sentence scoring handle it
+    clean = [w for w in words if w['id'] not in remove_ids]
+
     log(f"Filter: {len(words)} → {len(clean)} words "
-        f"(removed {len(words) - len(clean)})")
+        f"(removed {len(words) - len(clean)}, "
+        f"reasons: stutters/cues/abandoned only)")
     return clean
 
 
@@ -263,9 +274,8 @@ def build_sentences(words, take_decisions):
     """
     t0 = time.time()
 
-    # Step 1: Filter
-    remove_ids = set(take_decisions.get("remove_ids", []))
-    clean_words = filter_words(words, remove_ids)
+    # Step 1: Filter (minimal — only stutters, cues, abandoned)
+    clean_words = filter_words(words, take_decisions)
 
     if not clean_words:
         log("WARNING: No words left after filtering!")
