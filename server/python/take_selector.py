@@ -534,6 +534,154 @@ def find_similar_take_groups(takes, threshold, lookback_sec):
     return groups
 
 
+def find_partial_matches(takes, threshold, min_phrase_words=4):
+    """
+    Sliding window duplicate detection.
+
+    For each pair of takes where whole-take similarity < threshold,
+    slides the shorter take as a "window" across the longer take
+    and checks if any sub-sequence matches.
+
+    Returns list of partial match groups:
+    [
+        {
+            "phrase_text": "פרויקט חד פעמי אתה לא לומד...",
+            "versions": [
+                {"take_idx": 1, "word_ids": [20,21,22,...], "score": 0.82, "text": "..."},
+                {"take_idx": 6, "word_ids": [162,163,...], "score": 0.91, "text": "..."},
+            ]
+        },
+        ...
+    ]
+    """
+    partial_groups = []
+    n = len(takes)
+
+    # Track which take pairs were already matched as whole-take duplicates
+    # (we only do partial matching on pairs that DIDN'T match as whole takes)
+    already_matched = set()
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if (i, j) in already_matched:
+                continue
+
+            take_a = takes[i]
+            take_b = takes[j]
+
+            # Whole-take similarity first
+            text_a = [w["word"].strip() for w in take_a]
+            text_b = [w["word"].strip() for w in take_b]
+            whole_sim = semantic_similarity(text_a, text_b)
+
+            if whole_sim >= threshold:
+                # Already caught by whole-take detection, skip
+                already_matched.add((i, j))
+                continue
+
+            # Skip if both takes are very short
+            if len(take_a) < min_phrase_words and len(take_b) < min_phrase_words:
+                continue
+
+            # Determine which is shorter (window) and which is longer (target)
+            if len(take_a) <= len(take_b):
+                window_take, window_idx = take_a, i
+                target_take, target_idx = take_b, j
+            else:
+                window_take, window_idx = take_b, j
+                target_take, target_idx = take_a, i
+
+            window_text = [w["word"].strip() for w in window_take]
+            window_len = len(window_text)
+
+            if window_len < min_phrase_words:
+                continue
+
+            # Slide window across target
+            best_sim = 0.0
+            best_start = 0
+
+            target_text = [w["word"].strip() for w in target_take]
+
+            for start in range(len(target_text) - min_phrase_words + 1):
+                end = min(start + window_len + 2, len(target_text))  # +2 tolerance
+                sub_text = target_text[start:end]
+
+                if len(sub_text) < min_phrase_words:
+                    continue
+
+                sim = semantic_similarity(window_text, sub_text)
+
+                if sim > best_sim:
+                    best_sim = sim
+                    best_start = start
+
+            if best_sim >= threshold:
+                # Found partial match!
+                best_end = min(best_start + window_len + 2, len(target_take))
+                matched_words = target_take[best_start:best_end]
+
+                # Compute quality scores
+                def phrase_quality(words):
+                    """Quick quality score for a phrase version."""
+                    if not words:
+                        return 0.0
+                    avg_speaker = sum(w.get("speaker_score", 0.5) for w in words) / len(words)
+                    avg_speaker = max(0, avg_speaker)  # treat -1 as 0
+                    avg_conf = sum(w.get("confidence", 0.5) for w in words) / len(words)
+                    completeness = 1.0 if len(words) >= min_phrase_words else len(words) / min_phrase_words
+                    return avg_speaker * 0.5 + avg_conf * 0.3 + completeness * 0.2
+
+                window_score = phrase_quality(window_take)
+                target_score = phrase_quality(matched_words)
+
+                window_version = {
+                    "take_idx": window_idx,
+                    "word_ids": [w["id"] for w in window_take],
+                    "score": round(window_score, 3),
+                    "text": " ".join(window_text),
+                    "speaker_avg": round(sum(max(0, w.get("speaker_score", 0.5)) for w in window_take) / len(window_take), 3),
+                }
+                target_version = {
+                    "take_idx": target_idx,
+                    "word_ids": [w["id"] for w in matched_words],
+                    "score": round(target_score, 3),
+                    "text": " ".join(w["word"].strip() for w in matched_words),
+                    "speaker_avg": round(sum(max(0, w.get("speaker_score", 0.5)) for w in matched_words) / len(matched_words), 3),
+                }
+
+                # Check if this phrase already belongs to an existing group
+                merged = False
+                for group in partial_groups:
+                    existing_texts = [v["text"] for v in group["versions"]]
+                    for et in existing_texts:
+                        if semantic_similarity(window_text, et.split()) >= threshold:
+                            # Add to existing group if not already there
+                            for new_v in [window_version, target_version]:
+                                if new_v["word_ids"] not in [v["word_ids"] for v in group["versions"]]:
+                                    group["versions"].append(new_v)
+                            merged = True
+                            break
+                    if merged:
+                        break
+
+                if not merged:
+                    partial_groups.append({
+                        "phrase_text": " ".join(window_text[:6]) + ("..." if len(window_text) > 6 else ""),
+                        "similarity": round(best_sim, 3),
+                        "versions": [window_version, target_version],
+                    })
+
+                log(f"Partial match: take {window_idx} vs take {target_idx}, "
+                    f"sim={best_sim:.2f}, phrase='{' '.join(window_text[:5])}...'")
+
+    # Sort versions within each group by score (best first)
+    for group in partial_groups:
+        group["versions"].sort(key=lambda v: v["score"], reverse=True)
+
+    return partial_groups
+
+
 def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec):
     """
     Section 4.1: Complete-take repetition detection.
@@ -585,6 +733,41 @@ def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec
                 "reason": "duplicate_take",
                 "kept_ids": kept_ids,
             })
+
+    # Step 4: Partial matching — find duplicates within longer takes
+    partial_groups = find_partial_matches(takes, threshold)
+    if partial_groups:
+        log(f"Partial matching: {len(partial_groups)} phrase groups found")
+
+        for group in partial_groups:
+            versions = group["versions"]
+            if len(versions) < 2:
+                continue
+
+            # Best version = highest score
+            best = versions[0]
+            best_ids = set(best["word_ids"])
+
+            # Remove all other versions (unless already removed)
+            for ver in versions[1:]:
+                ids_to_remove = [wid for wid in ver["word_ids"]
+                                 if wid not in remove_ids and wid not in best_ids]
+                if not ids_to_remove:
+                    continue
+
+                if removed_count + len(ids_to_remove) > max_removable:
+                    log(f"Skipping partial duplicate ({len(ids_to_remove)} words) — would exceed cap")
+                    continue
+
+                remove_ids.update(ids_to_remove)
+                removed_count += len(ids_to_remove)
+                decisions.append({
+                    "ids": sorted(ids_to_remove),
+                    "reason": "duplicate_take",
+                    "kept_ids": sorted(best["word_ids"]),
+                })
+                log(f"  Removed {len(ids_to_remove)} words (partial dup), "
+                    f"keeping take {best['take_idx']}")
 
     return remove_ids, decisions
 
@@ -1211,10 +1394,17 @@ def main():
 
     processing_time_ms = int((time.time() - start_time) * 1000)
 
+    # Build partial match candidates for AI verification
+    # Re-run partial matching on ALL takes (including already-removed)
+    # so the AI can verify and potentially override
+    all_takes_for_partial = build_takes(all_words, set())  # no exclusions
+    partial_candidates = find_partial_matches(all_takes_for_partial, threshold=0.65)
+
     result = {
         "remove_ids": sorted(all_remove_ids),
         "decisions": all_decisions,
         "candidates": candidates,
+        "duplicate_candidates": partial_candidates,
         "stats": stats,
         "processing_time_ms": processing_time_ms,
     }

@@ -63,10 +63,25 @@ interface TakeCandidate {
   alternatives?: TakeCandidateAlternative[];
 }
 
+interface DuplicateVersion {
+  take_idx: number;
+  word_ids: number[];
+  score: number;
+  text: string;
+  speaker_avg: number;
+}
+
+interface DuplicateCandidate {
+  phrase_text: string;
+  similarity: number;
+  versions: DuplicateVersion[];
+}
+
 interface TakeDecisions {
   remove_ids: number[];
   decisions: TakeDecision[];
   candidates?: TakeCandidate[];
+  duplicate_candidates?: DuplicateCandidate[];
   stats: {
     duplicates_found: number;
     false_starts: number;
@@ -578,6 +593,138 @@ interface FlaggedKeepRange extends KeepRange {
 
 interface AIFinalReviewResult {
   keep_ranges: KeepRange[];
+}
+
+/**
+ * AI Step 0.5: Verify duplicate candidates found by take_selector.
+ * The math layer found phrases that LOOK similar.
+ * The AI verifies they are truly the same content and picks the best version.
+ *
+ * Returns: updated remove_ids and decisions with AI-verified duplicates.
+ */
+async function runAIDuplicateVerification(
+  duplicateCandidates: DuplicateCandidate[],
+  existingRemoveIds: Set<number>,
+  brain: AIBrain,
+  logger: Logger,
+): Promise<{ verifiedRemoveIds: Set<number>; verifiedDecisions: TakeDecision[] }> {
+
+  if (!duplicateCandidates || duplicateCandidates.length === 0) {
+    logger.info('AI Duplicate Verification: no candidates to verify');
+    return { verifiedRemoveIds: new Set(), verifiedDecisions: [] };
+  }
+
+  // Build prompt with all candidate groups
+  let groupsText = '';
+  for (let i = 0; i < duplicateCandidates.length; i++) {
+    const group = duplicateCandidates[i]!;
+    groupsText += `\n--- GROUP ${i + 1}: "${group.phrase_text}" (math similarity: ${group.similarity}) ---\n`;
+
+    for (let j = 0; j < group.versions.length; j++) {
+      const ver = group.versions[j]!;
+      const alreadyRemoved = ver.word_ids.some((id: number) => existingRemoveIds.has(id));
+      const status = alreadyRemoved ? ' [ALREADY REMOVED by other rule]' : '';
+      groupsText += `  Version ${j + 1} (Take ${ver.take_idx}): "${ver.text}"\n`;
+      groupsText += `    Speaker score: ${ver.speaker_avg}, Quality score: ${ver.score}${status}\n`;
+      groupsText += `    Word IDs: [${ver.word_ids.join(',')}]\n`;
+    }
+  }
+
+  const prompt = `You are a Hebrew video editor analyzing raw footage transcripts.
+The math layer found ${duplicateCandidates.length} groups of phrases that look similar.
+Your job: verify each group and pick the BEST version.
+
+RULES:
+1. Two phrases are duplicates ONLY if they express the SAME idea/sentence (even if wording differs slightly)
+2. Do NOT mark phrases as duplicates if they are genuinely different content
+3. For each confirmed duplicate group, pick the version with:
+   - Highest speaker_score (= most clearly the presenter's voice)
+   - Most complete sentence (not cut off mid-word)
+   - Best flow (natural speech, no stutters)
+4. If a version is already marked [ALREADY REMOVED], ignore it — don't pick it as best
+
+CANDIDATE GROUPS:
+${groupsText}
+
+Respond ONLY with valid JSON (no markdown, no backticks):
+{
+  "verified_groups": [
+    {
+      "group_index": 1,
+      "is_duplicate": true,
+      "best_version_index": 1,
+      "reason": "short explanation in Hebrew"
+    }
+  ]
+}
+
+If a group is NOT a real duplicate, set is_duplicate: false.
+Include ALL groups in your response.`;
+
+  try {
+    const result = await askAIJSON<{ verified_groups: Array<{
+      group_index: number;
+      is_duplicate: boolean;
+      best_version_index?: number;
+      reason?: string;
+    }> }>(prompt, {
+      brain,
+      maxTokens: 2048,
+      timeout: 120000,
+      logger,
+    });
+
+    const data = result.data;
+    if (!data || !data.verified_groups) {
+      logger.warn('AI Duplicate Verification: invalid response, skipping');
+      return { verifiedRemoveIds: new Set(), verifiedDecisions: [] };
+    }
+
+    const newRemoveIds = new Set<number>();
+    const newDecisions: TakeDecision[] = [];
+
+    for (const vg of data.verified_groups) {
+      if (!vg.is_duplicate) continue;
+
+      const groupIdx = vg.group_index - 1; // 1-indexed in prompt
+      if (groupIdx < 0 || groupIdx >= duplicateCandidates.length) continue;
+
+      const group = duplicateCandidates[groupIdx]!;
+      const bestVerIdx = (vg.best_version_index || 1) - 1;
+      if (bestVerIdx < 0 || bestVerIdx >= group.versions.length) continue;
+
+      const bestVersion = group.versions[bestVerIdx]!;
+      const bestIds = new Set(bestVersion.word_ids);
+
+      // Remove all other versions
+      for (let v = 0; v < group.versions.length; v++) {
+        if (v === bestVerIdx) continue;
+        const ver = group.versions[v]!;
+        const idsToRemove = ver.word_ids.filter(
+          (id: number) => !existingRemoveIds.has(id) && !bestIds.has(id)
+        );
+
+        if (idsToRemove.length > 0) {
+          for (const id of idsToRemove) newRemoveIds.add(id);
+          newDecisions.push({
+            ids: idsToRemove,
+            reason: 'duplicate_take',
+            kept_ids: bestVersion.word_ids,
+          });
+        }
+      }
+
+      logger.info(`AI verified duplicate group ${vg.group_index}: ` +
+        `keeping version ${vg.best_version_index}, reason: ${vg.reason}`);
+    }
+
+    logger.info(`AI Duplicate Verification: ${newRemoveIds.size} additional words to remove`);
+    return { verifiedRemoveIds: newRemoveIds, verifiedDecisions: newDecisions };
+
+  } catch (err) {
+    logger.error('AI Duplicate Verification failed', { error: String(err) });
+    return { verifiedRemoveIds: new Set(), verifiedDecisions: [] };
+  }
 }
 
 async function runAINarrativeSelection(
@@ -1401,6 +1548,36 @@ export async function runMergeAndClean(
     }
   }
   logger.info('Hard rejected words (hidden from AI)', { count: hardRejectedIds.size });
+
+  // ── AI Step 0.5: Verify duplicate candidates ──
+  const duplicateCandidates = takeDecisions.duplicate_candidates || [];
+  if (duplicateCandidates.length > 0) {
+    logger.info('AI Step 0.5: Verifying duplicate candidates', {
+      groups: duplicateCandidates.length, brain,
+    });
+
+    const { verifiedRemoveIds, verifiedDecisions } = await runAIDuplicateVerification(
+      duplicateCandidates,
+      new Set([...takeSelectorIds, ...hardRejectedIds]),
+      brain,
+      logger,
+    );
+
+    // Merge verified duplicates into take selector results
+    for (const id of verifiedRemoveIds) {
+      takeSelectorIds.add(id);
+    }
+    // Add verified decisions to hints
+    for (const dec of verifiedDecisions) {
+      takeDecisions.decisions.push(dec);
+      takeDecisions.remove_ids.push(...dec.ids);
+    }
+
+    logger.info('AI Step 0.5 completed', {
+      additionalRemovals: verifiedRemoveIds.size,
+      totalTakeSelectorIds: takeSelectorIds.size,
+    });
+  }
 
   // Step 2: AI Step 1 — Select narrative from ALL words (with take selector hints)
   const allWordsText = buildStructuredText(merged.words, takeSelectorIds, hardRejectedIds, logger);
