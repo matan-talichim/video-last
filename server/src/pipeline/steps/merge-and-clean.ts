@@ -1298,6 +1298,62 @@ function expandToCompleteSentences(
   return result;
 }
 
+// ── Ensure CTA segment exists ──
+
+function ensureCTAExists(
+  keepRanges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+): KeepRange[] {
+  const CTA_WORDS = new Set(['תשאיר', 'תשאירו', 'פרטים', 'לשיחת', 'אפיון', 'צרו', 'קשר', 'התקשרו']);
+
+  const hasCTA = keepRanges.some(range =>
+    range.ids.some(id => {
+      const w = words.find(wd => wd.id === id);
+      return w && CTA_WORDS.has(w.word);
+    }),
+  );
+
+  if (hasCTA) {
+    logger.info('ensureCTAExists: CTA already present, skipping');
+    return keepRanges;
+  }
+
+  // Find the LAST CTA in the transcript (presenter usually says the best one last)
+  const presenterWords = words.filter(w => w.is_presenter);
+  let lastCTAStart = -1;
+  for (let i = 0; i < presenterWords.length; i++) {
+    if (CTA_WORDS.has(presenterWords[i].word)) {
+      lastCTAStart = i;
+    }
+  }
+
+  if (lastCTAStart === -1) {
+    logger.info('ensureCTAExists: no CTA found in transcript');
+    return keepRanges;
+  }
+
+  // Collect from CTA start until end of sentence (up to 10 words, same take)
+  const ctaIds: number[] = [];
+  const takeId = presenterWords[lastCTAStart].take_id;
+  for (let j = lastCTAStart; j < presenterWords.length && j < lastCTAStart + 10; j++) {
+    if (presenterWords[j].take_id !== takeId) break;
+    ctaIds.push(presenterWords[j].id);
+  }
+
+  if (ctaIds.length >= 4) {
+    keepRanges.push({ ids: ctaIds, reason: 'CTA — auto-added' });
+    logger.info('ensureCTAExists: added missing CTA segment', {
+      wordCount: ctaIds.length,
+      ids: ctaIds,
+    });
+  } else {
+    logger.info('ensureCTAExists: CTA too short, skipping', { wordCount: ctaIds.length });
+  }
+
+  return keepRanges;
+}
+
 // ── Trim duplicate edge words (e.g. "ידנית" from previous sentence leaking into next segment) ──
 
 function trimDuplicateEdges(
@@ -1564,8 +1620,11 @@ Respond with ONLY a valid JSON object. No text before or after.
   // Step 2.95: Expand to complete sentences
   const expandedRanges = expandToCompleteSentences(trimmedRanges, merged.words, logger);
 
+  // Step 2.96: Ensure CTA segment exists
+  const ctaRanges = ensureCTAExists(expandedRanges, merged.words, logger);
+
   // Step 3: Cross-reference with presenter detection
-  const flaggedRanges = crossReferencePresenter(expandedRanges, merged.words, logger);
+  const flaggedRanges = crossReferencePresenter(ctaRanges, merged.words, logger);
 
   // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
   const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
