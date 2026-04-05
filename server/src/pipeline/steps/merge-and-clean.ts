@@ -599,12 +599,32 @@ async function runAINarrativeSelection(
 
   logger.info('AI Step 1: Selecting narrative from all words', { brain });
 
-  const { data, usage } = await askAIJSON<AICleanResult>(userPrompt, {
-    brain,
-    maxTokens: aiSettings?.maxTokens ?? 4096,
-    timeout: aiSettings?.timeout ?? 60000,
-    logger,
-  });
+  let data: AICleanResult;
+  let usage: AIUsage;
+
+  try {
+    const result = await askAIJSON<AICleanResult>(userPrompt, {
+      brain,
+      maxTokens: aiSettings?.maxTokens ?? 4096,
+      timeout: aiSettings?.timeout ?? 60000,
+      logger,
+    });
+    data = result.data;
+    usage = result.usage;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('AI Step 1 returned non-JSON, retrying with strict JSON instruction', { error: message });
+
+    const jsonRetryPrompt = 'You must return ONLY JSON. No Hebrew text.\n\n' + userPrompt;
+    const retryResult = await askAIJSON<AICleanResult>(jsonRetryPrompt, {
+      brain,
+      maxTokens: aiSettings?.maxTokens ?? 4096,
+      timeout: aiSettings?.timeout ?? 60000,
+      logger,
+    });
+    data = retryResult.data;
+    usage = retryResult.usage;
+  }
 
   if (!Array.isArray(data.keep_ranges)) {
     data.keep_ranges = [];
@@ -1416,7 +1436,16 @@ MISSING PARTS CHECK — verify each one:
 - Result/guarantee
 - Call to action
 
-Add segments for any missing part. Target: at least ${Math.ceil(presenterWords.length * 0.6)} words.`;
+Add segments for any missing part. Target: at least ${Math.ceil(presenterWords.length * 0.6)} words.
+
+RETURN FORMAT — JSON ONLY:
+Respond with ONLY a valid JSON object. No text before or after.
+{
+  "keep_ranges": [
+    { "ids": [1,2,3,...], "reason": "..." },
+    ...
+  ]
+}`;
 
     const retry = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger, retryPreamble);
     narrativeRanges = retry.narrativeRanges;
