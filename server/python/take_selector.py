@@ -482,7 +482,7 @@ def build_takes(words, already_removed, gap_threshold=0.5):
     return takes
 
 
-def find_similar_take_groups(takes, threshold, lookback_sec):
+def find_similar_take_groups(takes, threshold, lookback_sec, sim_func=None):
     """
     Compare all take pairs within lookback window using cosine BoW.
     Group similar takes (similarity >= threshold) using greedy chaining.
@@ -504,7 +504,8 @@ def find_similar_take_groups(takes, threshold, lookback_sec):
                 break
 
             text_j = [w["word"].strip() for w in takes[j]]
-            sim = semantic_similarity(text_i, text_j)
+            _sim = sim_func or semantic_similarity
+            sim = _sim(text_i, text_j)
             if sim >= threshold:
                 adjacency[i].add(j)
                 adjacency[j].add(i)
@@ -572,7 +573,7 @@ def find_partial_matches(takes, threshold, min_phrase_words=4):
             # Whole-take similarity first
             text_a = [w["word"].strip() for w in take_a]
             text_b = [w["word"].strip() for w in take_b]
-            whole_sim = semantic_similarity(text_a, text_b)
+            whole_sim = cosine_similarity_bow(text_a, text_b)
 
             if whole_sim >= threshold:
                 # Already caught by whole-take detection, skip
@@ -610,7 +611,7 @@ def find_partial_matches(takes, threshold, min_phrase_words=4):
                 if len(sub_text) < min_phrase_words:
                     continue
 
-                sim = semantic_similarity(window_text, sub_text)
+                sim = cosine_similarity_bow(window_text, sub_text)
 
                 if sim > best_sim:
                     best_sim = sim
@@ -655,7 +656,7 @@ def find_partial_matches(takes, threshold, min_phrase_words=4):
                 for group in partial_groups:
                     existing_texts = [v["text"] for v in group["versions"]]
                     for et in existing_texts:
-                        if semantic_similarity(window_text, et.split()) >= threshold:
+                        if cosine_similarity_bow(window_text, et.split()) >= threshold:
                             # Add to existing group if not already there
                             for new_v in [window_version, target_version]:
                                 if new_v["word_ids"] not in [v["word_ids"] for v in group["versions"]]:
@@ -700,7 +701,7 @@ def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec
         return remove_ids, decisions
 
     # Step 2: Find groups of similar takes
-    groups = find_similar_take_groups(takes, threshold, lookback_sec)
+    groups = find_similar_take_groups(takes, threshold, lookback_sec, sim_func=cosine_similarity_bow)
     log(f"Repetition detection: {len(groups)} similar-take groups found")
 
     # Step 3: For each group, keep last take, remove the rest
@@ -1398,7 +1399,7 @@ def main():
     # Re-run partial matching on ALL takes (including already-removed)
     # so the AI can verify and potentially override
     all_takes_for_partial = build_takes(all_words, set())  # no exclusions
-    partial_candidates = find_partial_matches(all_takes_for_partial, threshold=0.65)
+    partial_candidates = find_partial_matches(all_takes_for_partial, threshold=0.55)
 
     result = {
         "remove_ids": sorted(all_remove_ids),
