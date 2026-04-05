@@ -67,8 +67,9 @@ HEBREW_FILLERS = [
 ]
 
 # Thresholds (defaults, overridable via config)
-SIMILARITY_THRESHOLD = 0.70
-LOOKBACK_SECONDS = 15.0
+SIMILARITY_THRESHOLD = 0.75
+LOOKBACK_SECONDS = 10.0
+MAX_DUPLICATE_REMOVAL_RATIO = 0.50  # Never remove more than 50% of total presenter words
 SCORING_OVERRIDE_MARGIN = 0.20
 TARGET_WPS = 2.7
 COARTICULATION_GAP_MS = 20.0
@@ -134,7 +135,7 @@ def compute_rms(audio_data, sample_rate, start, end):
 # ── Text helpers ─────────────────────────────────────
 
 def cosine_similarity_bow(words_a, words_b):
-    """Cosine similarity between two word lists (bag of words)."""
+    """Cosine similarity between two word lists (bag of words). Fallback method."""
     counter_a = Counter(words_a)
     counter_b = Counter(words_b)
     all_keys = set(counter_a) | set(counter_b)
@@ -144,6 +145,56 @@ def cosine_similarity_bow(words_a, words_b):
     if mag_a == 0 or mag_b == 0:
         return 0.0
     return dot / (mag_a * mag_b)
+
+
+# ── Semantic similarity (Sentence Transformers) ─────
+
+_st_model = None
+_st_available = None
+
+
+def _load_st_model():
+    """Load multilingual sentence transformer model (lazy, once)."""
+    global _st_model, _st_available
+    if _st_available is not None:
+        return _st_available
+
+    try:
+        from sentence_transformers import SentenceTransformer
+        log("Loading sentence-transformers model: intfloat/multilingual-e5-small")
+        _st_model = SentenceTransformer("intfloat/multilingual-e5-small")
+        _st_available = True
+        log("Sentence-transformers model loaded successfully")
+        return True
+    except ImportError:
+        log("sentence-transformers not installed, falling back to BoW similarity")
+        _st_available = False
+        return False
+    except Exception as e:
+        log(f"Failed to load sentence-transformers model: {e}, falling back to BoW")
+        _st_available = False
+        return False
+
+
+def semantic_similarity(words_a, words_b):
+    """
+    Compute semantic similarity between two word lists.
+    Uses sentence-transformers (multilingual-e5-small) if available,
+    falls back to bag-of-words cosine similarity.
+    """
+    if _load_st_model():
+        text_a = " ".join(words_a)
+        text_b = " ".join(words_b)
+        # E5 models require "query: " or "passage: " prefix
+        embeddings = _st_model.encode(
+            [f"query: {text_a}", f"query: {text_b}"],
+            normalize_embeddings=True,
+        )
+        # Cosine similarity of normalized vectors = dot product
+        sim = float(embeddings[0] @ embeddings[1])
+        return sim
+    else:
+        return cosine_similarity_bow(words_a, words_b)
 
 
 def ends_with_punctuation(word_text):
@@ -162,30 +213,47 @@ def get_gap_after(word, next_word):
 
 def detect_micro_stutters(presenter_words):
     """
-    Section 4.3: Same string (1-3 chars), appears 2+ times consecutive,
-    gap < 200ms. Keep only last occurrence.
+    Detect any word repeated 2+ times consecutively with gap < 300ms.
+    Keep only the last occurrence.
+    Allows skipping up to 1 non-matching word between repetitions
+    (handles cases where chronological sort inserted a word between stutters).
     """
+    print(f"[stutter] Starting with {len(presenter_words)} words", file=sys.stderr)
     decisions = []
     remove_ids = set()
+    consumed = set()  # track indices already consumed in a stutter group
     i = 0
 
     while i < len(presenter_words):
-        w = presenter_words[i]
-        text = w["word"].strip()
-
-        # Only short words (1-3 chars)
-        if len(text) > 3:
+        if i in consumed:
             i += 1
             continue
 
-        # Find consecutive identical words with small gap
+        w = presenter_words[i]
+        text = w["word"].strip()
+
+        # Find consecutive identical words with small gap, allowing 1 skip
         group = [w]
+        group_indices = [i]
         j = i + 1
+        skipped = []  # track skipped words (non-matching but within gap)
+
         while j < len(presenter_words):
             nw = presenter_words[j]
             gap_ms = (nw["start"] - group[-1]["end"]) * 1000.0
-            if nw["word"].strip() == text and gap_ms < 200:
+            print(f"[stutter] Checking [{w['id']}] '{w['word']}' vs [{nw['id']}] '{nw['word']}' gap={gap_ms:.0f}ms", file=sys.stderr)
+
+            if gap_ms >= 300:
+                break  # too far apart, stop looking
+
+            if nw["word"].strip() == text:
                 group.append(nw)
+                group_indices.append(j)
+                j += 1
+                skipped = []  # reset skip counter after a match
+            elif len(skipped) < 1:
+                # Allow skipping 1 non-matching word within gap
+                skipped.append(j)
                 j += 1
             else:
                 break
@@ -194,13 +262,18 @@ def detect_micro_stutters(presenter_words):
             # Keep only last occurrence
             to_remove = [g["id"] for g in group[:-1]]
             remove_ids.update(to_remove)
+            consumed.update(group_indices)
             decisions.append({
                 "ids": to_remove,
                 "reason": "stutter",
                 "kept_ids": [group[-1]["id"]],
             })
-
-        i = j if len(group) >= 2 else i + 1
+            print(f"[stutter] Found group: ids={[g['id'] for g in group]} word='{text}', removing={to_remove}", file=sys.stderr)
+            # Resume right after last group member, not at j —
+            # otherwise words "skipped" during lookahead are never checked as stutter starts.
+            i = group_indices[-1] + 1
+        else:
+            i += 1
 
     return remove_ids, decisions
 
@@ -308,7 +381,7 @@ def detect_full_abandoned_takes(presenter_words, cue_remove_ids):
         # Compare text similarity
         abandoned_text = [w["word"].strip() for w in abandoned_words]
         new_text = [w["word"].strip() for w in new_take_words[:len(abandoned_text) + 3]]
-        sim = cosine_similarity_bow(abandoned_text, new_text)
+        sim = semantic_similarity(abandoned_text, new_text)
 
         if sim > 0.5:
             # Delete the abandoned take
@@ -431,7 +504,7 @@ def find_similar_take_groups(takes, threshold, lookback_sec):
                 break
 
             text_j = [w["word"].strip() for w in takes[j]]
-            sim = cosine_similarity_bow(text_i, text_j)
+            sim = semantic_similarity(text_i, text_j)
             if sim >= threshold:
                 adjacency[i].add(j)
                 adjacency[j].add(i)
@@ -483,7 +556,16 @@ def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec
     log(f"Repetition detection: {len(groups)} similar-take groups found")
 
     # Step 3: For each group, keep last take, remove the rest
+    # But never remove more than MAX_DUPLICATE_REMOVAL_RATIO of total presenter words
+    total_presenter = len([w for w in presenter_words if w["id"] not in already_removed])
+    max_removable = int(total_presenter * MAX_DUPLICATE_REMOVAL_RATIO)
+    removed_count = 0
+
     for group in groups:
+        if removed_count >= max_removable:
+            log(f"Duplicate removal cap reached ({removed_count}/{max_removable}), stopping")
+            break
+
         # Sort by start time — last take wins
         group_takes = [(idx, takes[idx]) for idx in group]
         group_takes.sort(key=lambda t: t[1][0]["start"])
@@ -493,7 +575,11 @@ def detect_repetitions(presenter_words, already_removed, threshold, lookback_sec
 
         for idx, take in group_takes[:-1]:
             ids = sorted([w["id"] for w in take])
+            if removed_count + len(ids) > max_removable:
+                log(f"Skipping duplicate group ({len(ids)} words) — would exceed cap")
+                continue
             remove_ids.update(ids)
+            removed_count += len(ids)
             decisions.append({
                 "ids": ids,
                 "reason": "duplicate_take",
@@ -649,6 +735,146 @@ def detect_internal_retakes(words, already_removed):
     return remove_ids, decisions
 
 
+def apply_hard_rejection(words, all_words, already_removed):
+    """
+    Hard reject entire segments that fail quality checks (2+ signals required).
+    These segments will be marked for removal and NOT sent to AI.
+    """
+    reject_ids = set()
+    decisions = []
+
+    active = [w for w in words if w['id'] not in already_removed]
+    takes = build_takes(active, already_removed)
+
+    for take in takes:
+        if not take:
+            continue
+        take_ids = [w['id'] for w in take]
+
+        # Count how many rejection signals this take has
+        signals = 0
+        signal_names = []
+
+        # SIGNAL 1: >40% of words are non-presenter
+        non_presenter = sum(1 for w in take if not w.get('is_presenter', True))
+        if len(take) > 0 and non_presenter / len(take) > 0.4:
+            signals += 1
+            signal_names.append('non_presenter')
+
+        # SIGNAL 2: speaker_score average < 0.45
+        scores = [w.get('speaker_score', 1.0) for w in take if 'speaker_score' in w]
+        if scores and sum(scores) / len(scores) < 0.45:
+            signals += 1
+            signal_names.append('low_speaker_score')
+
+        # SIGNAL 3: Incomplete ending (last word <= 2 chars + gap > 1s)
+        last_word = take[-1]
+        incomplete_ending = False
+        if len(last_word['word']) <= 2:
+            next_words = [w for w in all_words if w['start'] > last_word['end']]
+            if next_words and next_words[0]['start'] - last_word['end'] > 1.0:
+                incomplete_ending = True
+        if incomplete_ending:
+            signals += 1
+            signal_names.append('incomplete_ending')
+
+        # SIGNAL 4: Heavy stuttering (same word repeated consecutively)
+        word_texts = [w['word'] for w in take]
+        stutter_count = sum(1 for i in range(len(word_texts) - 1)
+                           if word_texts[i] == word_texts[i + 1])
+        if len(take) > 3 and stutter_count / len(take) > 0.2:
+            signals += 1
+            signal_names.append('heavy_stutter')
+
+        # Reject only if 2+ signals
+        if signals >= 2:
+            reject_ids.update(take_ids)
+            decisions.append({
+                'ids': sorted(take_ids),
+                'reason': 'hard_reject',
+                'signals': signal_names,
+            })
+            log(f"Hard reject: {len(take_ids)} words, signals: {signal_names}")
+
+    return reject_ids, decisions
+
+
+def build_ranked_candidates(words, all_words, already_removed, audio_data=None, sample_rate=16000):
+    """
+    For each unique sentence/idea, find all takes and rank them.
+    Returns top 3 candidates per sentence group.
+    """
+    active = [w for w in words if w['id'] not in already_removed
+              and w.get('is_presenter', True)]
+    takes = build_takes(active, already_removed)
+    print(f"[candidates] Active presenter words: {len(active)}", file=sys.stderr)
+    print(f"[candidates] Takes built: {len(takes)}", file=sys.stderr)
+    for i, t in enumerate(takes[:5]):
+        text = ' '.join([w['word'] for w in t])[:60]
+        print(f"[candidates]   Take {i}: {len(t)} words: {text}...", file=sys.stderr)
+
+    if not takes:
+        print("[candidates] No takes found — returning empty candidates", file=sys.stderr)
+        return []
+
+    if len(takes) < 2:
+        print("[candidates] Not enough takes to compare", file=sys.stderr)
+        return []
+
+    # Group similar takes
+    groups = find_similar_take_groups(takes, threshold=0.70, lookback_sec=999)
+    print(f"[candidates] Similar groups found (threshold=0.70): {len(groups)}", file=sys.stderr)
+
+    # Retry with lower threshold if no groups found
+    if len(groups) == 0 and len(takes) >= 2:
+        groups = find_similar_take_groups(takes, threshold=0.50, lookback_sec=999)
+        print(f"[candidates] Retry with threshold=0.50: {len(groups)} groups", file=sys.stderr)
+
+    log(f"[candidates] Final groups: {len(groups)}")
+
+    ranked = []
+    for group_indices in groups:
+        group_takes = [takes[i] for i in group_indices]
+        scored = []
+        for take in group_takes:
+            score = score_take(take, audio_data, sample_rate)
+
+            # Bonus: no starred words
+            starred = sum(1 for w in take if not w.get('is_presenter', True))
+            clean_bonus = 0.1 if starred == 0 else 0
+
+            # Bonus: complete sentence (last word > 2 chars)
+            last_word = take[-1]['word']
+            complete_bonus = 0.05 if len(last_word) > 2 else 0
+
+            total = score + clean_bonus + complete_bonus
+            scored.append((take, total))
+
+        # Sort by score descending, keep top 3
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        best_take = scored[0][0]
+        sentence_text = ' '.join(w['word'] for w in best_take[:6])
+        if len(best_take) > 6:
+            sentence_text += '...'
+
+        entry = {
+            'sentence_group': sentence_text,
+            'best_take_ids': [w['id'] for w in scored[0][0]],
+            'alternatives': [
+                {
+                    'ids': [w['id'] for w in take],
+                    'score': round(s, 2),
+                }
+                for take, s in scored[1:3]
+            ],
+        }
+        ranked.append(entry)
+
+    log(f"Ranked candidates: {len(ranked)} sentence groups")
+    return ranked
+
+
 def apply_coarticulation_protection(remove_ids, presenter_words, decisions):
     """
     CRITICAL rule 3: If gap between two consecutive words < 20ms,
@@ -660,11 +886,13 @@ def apply_coarticulation_protection(remove_ids, presenter_words, decisions):
     production cues, or abandoned takes. If a word is part of a group
     removal → coarticulation does NOT restore it.
     """
-    # Build set of word IDs that belong to group removals (not individual)
-    group_removal_reasons = {"duplicate_take", "production_cue", "abandoned_take", "false_start"}
+    # Build set of word IDs exempt from coarticulation protection.
+    # Group removals + stutters: stutters are duplicates by definition,
+    # so the repeated word should always be removable regardless of gap to neighbour.
+    exempt_reasons = {"duplicate_take", "production_cue", "abandoned_take", "false_start", "stutter"}
     group_removal_ids = set()
     for dec in decisions:
-        if dec["reason"] in group_removal_reasons:
+        if dec["reason"] in exempt_reasons:
             group_removal_ids.update(dec["ids"])
 
     restored = set()
@@ -835,6 +1063,15 @@ def main():
         except Exception as e:
             log(f"Could not load audio: {e}")
 
+    # 0. Build ranked candidates BEFORE any removals (so all takes are visible)
+    candidates = build_ranked_candidates(
+        words=all_words,
+        all_words=all_words,
+        already_removed=set(),
+        audio_data=audio_data,
+        sample_rate=sample_rate or 16000,
+    )
+
     all_remove_ids = set()
     all_decisions = []
 
@@ -883,7 +1120,13 @@ def main():
     for dec in all_decisions:
         all_remove_ids.update(dec["ids"])
 
-    # 6.5. Internal retake detection (within-take repeated phrases)
+    # 6.5. Hard rejection (requires 2+ signals to reject)
+    hard_reject_ids, hard_reject_decs = apply_hard_rejection(all_words, all_words, all_remove_ids)
+    all_remove_ids |= hard_reject_ids
+    all_decisions.extend(hard_reject_decs)
+    log(f"Hard rejections: {len(hard_reject_decs)} takes, {len(hard_reject_ids)} words")
+
+    # 6.7. Internal retake detection (within-take repeated phrases)
     internal_ids, internal_decs = detect_internal_retakes(all_words, all_remove_ids)
     all_remove_ids |= internal_ids
     all_decisions.extend(internal_decs)
@@ -914,6 +1157,13 @@ def main():
     # Ensure only presenter words remain in remove_ids after protections
     all_remove_ids &= presenter_ids
 
+    # 8.5. Candidates already built in step 0 (before removals)
+
+    # Count stutter groups before deduplication (which merges all stutters into 1 entry)
+    stutter_group_count = sum(1 for d in all_decisions
+                             if d["reason"] == "stutter"
+                             and any(wid in all_remove_ids for wid in d["ids"]))
+
     # 9. Deduplicate and clean decisions (priority-based conflict resolution)
     all_decisions = deduplicate_decisions(all_decisions, all_remove_ids)
 
@@ -927,9 +1177,10 @@ def main():
         "duplicates_found": reason_counts.get("duplicate_take", 0),
         "false_starts": reason_counts.get("false_start", 0),
         "production_cues": reason_counts.get("production_cue", 0),
-        "stutters": reason_counts.get("stutter", 0),
+        "stutters": stutter_group_count,
         "abandoned_takes": reason_counts.get("abandoned_take", 0),
         "internal_retakes": reason_counts.get("internal_retake", 0),
+        "hard_rejections": reason_counts.get("hard_reject", 0),
         "total_removed_words": len(all_remove_ids),
     }
 
@@ -945,6 +1196,7 @@ def main():
     result = {
         "remove_ids": sorted(all_remove_ids),
         "decisions": all_decisions,
+        "candidates": candidates,
         "stats": stats,
         "processing_time_ms": processing_time_ms,
     }

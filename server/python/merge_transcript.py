@@ -25,6 +25,8 @@ def parse_args():
     parser.add_argument("--output", required=True, help="Path to output merged_transcript.json")
     parser.add_argument("--buffer", type=float, default=0.25, help="Buffer in seconds around each segment")
     parser.add_argument("--audio", default=None, help="Path to audio.wav for RMS volume filtering")
+    parser.add_argument("--speaker-verify", action="store_true", default=False,
+                        help="Enable WeSpeaker speaker verification (requires wespeaker-onnx)")
     return parser.parse_args()
 
 
@@ -114,68 +116,92 @@ def main():
         print("[merge] No valid presenter_segments found, treating all words as presenter", file=sys.stderr)
         segments = []
 
-    # Build flat word array with sequential IDs (overlap-only detection)
+    # Build flat word array with sequential IDs
     word_list = []
-    presenter_count = 0
-    other_count = 0
 
     for idx, w in enumerate(words):
-        is_pres = is_presenter_word(w, segments, args.buffer) if segments else True
-
         entry = {
             "id": idx,
             "word": w["word"],
             "start": w["start"],
             "end": w["end"],
-            "is_presenter": is_pres,
             "confidence": w.get("confidence", 0.0),
         }
-
         word_list.append(entry)
-        if is_pres:
-            presenter_count += 1
-        else:
-            other_count += 1
 
-    # ── Pass 2: RMS volume filtering ──
-    rms_filtered_count = 0
+    # ── Compute raw signals ──
+
+    # RMS per word
     if args.audio:
         try:
             audio_data, sample_rate = load_audio(args.audio)
-
-            # Compute RMS for every word
             for entry in word_list:
                 entry["rms"] = compute_word_rms(audio_data, sample_rate, entry["start"], entry["end"])
+            print(f"[merge] RMS computed for {len(word_list)} words", file=sys.stderr)
+        except Exception as e:
+            print(f"[merge] RMS computation failed, skipping: {e}", file=sys.stderr)
 
-            # Reference RMS = median of high-confidence presenter words
-            ref_rms_values = [
-                entry["rms"]
-                for entry in word_list
-                if entry["is_presenter"] and entry["confidence"] > 0.90 and entry["rms"] > 0
-            ]
+    # Speaker verification (WeSpeaker) — adds speaker_score per word
+    speaker_verify_stats = None
+    if args.speaker_verify and args.audio:
+        try:
+            from speaker_verify import build_reference_embedding, verify_speaker
 
-            if ref_rms_values:
-                reference_rms = float(np.median(ref_rms_values))
-                threshold = reference_rms * 0.40
+            print("[merge] Running WeSpeaker speaker verification...", file=sys.stderr)
 
+            reference = build_reference_embedding(args.audio, segments)
+
+            if reference is not None:
+                # verify_speaker adds speaker_score to each word
+                # We pass is_presenter=True for all temporarily — word_scorer will decide
                 for entry in word_list:
-                    if entry["is_presenter"] and entry["rms"] < threshold:
-                        entry["is_presenter"] = False
-                        rms_filtered_count += 1
-
-                # Update counters
-                presenter_count -= rms_filtered_count
-                other_count += rms_filtered_count
-
+                    entry["is_presenter"] = True
+                word_list, speaker_verify_stats = verify_speaker(
+                    args.audio, word_list, reference,
+                    threshold_high=0.6, threshold_low=0.4,
+                )
                 print(
-                    f"[merge] RMS filtering: reference_rms={reference_rms:.4f}, "
-                    f"threshold={threshold:.4f}, filtered_words={rms_filtered_count}",
+                    f"[merge] Speaker scores computed "
+                    f"(promoted={speaker_verify_stats['promoted']}, "
+                    f"demoted={speaker_verify_stats['demoted']})",
                     file=sys.stderr,
                 )
             else:
-                print("[merge] RMS filtering: no high-confidence presenter words for reference, skipping", file=sys.stderr)
+                print("[merge] Speaker verification skipped: no reference embedding", file=sys.stderr)
+        except ImportError as e:
+            print(f"[merge] Speaker verification unavailable (missing dependency): {e}", file=sys.stderr)
         except Exception as e:
-            print(f"[merge] RMS filtering failed, skipping: {e}", file=sys.stderr)
+            print(f"[merge] Speaker verification failed, skipping: {e}", file=sys.stderr)
+    elif args.speaker_verify and not args.audio:
+        print("[merge] Speaker verification skipped: --audio required", file=sys.stderr)
+
+    # ── Centralized scoring — single decision per word ──
+    from word_scorer import score_all_words
+
+    word_list = score_all_words(word_list, segments)
+
+    # Before sorting: assign take_id based on gaps in ORIGINAL order
+    take_id = 0
+    for i in range(len(word_list)):
+        word_list[i]['take_id'] = take_id
+        if i < len(word_list) - 1:
+            gap = word_list[i + 1]['start'] - word_list[i]['end']
+            if gap > 0.3:
+                take_id += 1
+
+    print(f"[merge] Assigned {take_id + 1} takes before chronological sort", file=sys.stderr)
+
+    # Sort words chronologically and re-assign IDs
+    word_list.sort(key=lambda w: w['start'])
+    for i, w in enumerate(word_list):
+        w['id'] = i
+
+    # Map final_decision to is_presenter
+    for entry in word_list:
+        entry["is_presenter"] = entry["final_decision"] != "reject"
+
+    presenter_count = sum(1 for w in word_list if w["is_presenter"])
+    other_count = len(word_list) - presenter_count
 
     processing_time_ms = int((time.time() - start_time) * 1000)
 
@@ -189,6 +215,9 @@ def main():
             "processing_time_ms": processing_time_ms,
         },
     }
+
+    if speaker_verify_stats:
+        result["stats"]["speaker_verify"] = speaker_verify_stats
 
     # Write to output file
     with open(args.output, "w", encoding="utf-8") as f:
