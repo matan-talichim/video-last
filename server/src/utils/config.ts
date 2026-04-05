@@ -39,6 +39,63 @@ export interface AIConfig {
 export interface AnalysisConfig {
   timeout: number;
   maxFrames: number;
+  maxTokens?: number;
+}
+
+export interface TranscriptionConfig {
+  model: string;
+  language: string;
+  smartFormat: boolean;
+  utterances: boolean;
+  punctuate: boolean;
+  words: boolean;
+  paragraphs: boolean;
+}
+
+export interface PresenterDetectionConfig {
+  lipThreshold: number;
+  vadThreshold: number;
+  buffer: number;
+  pythonPath: string;
+  speakerVerify: boolean;
+}
+
+export interface EditAssemblyConfig {
+  paddingStart: number;
+  paddingEnd: number;
+  fadeDuration: number;
+  crf: number;
+  preset: string;
+  audioBitrate: string;
+  minSegmentDuration: number;
+  denoiseNoiseFloor: number;
+  audioCrossfade: number;
+  loudnormIntegrated: number;
+  loudnormTruePeak: number;
+  loudnormRange: number;
+}
+
+export interface TakeSelectorConfig {
+  enabled: boolean;
+  similarityThreshold: number;
+  lookbackSeconds: number;
+  scoringOverrideMargin: number;
+}
+
+export interface WordScorerConfig {
+  thresholdPresenter: number;
+  thresholdReject: number;
+}
+
+export interface MergeAndCleanConfig {
+  silenceThresholdMs: number;
+  minSegmentAfterSplit: number;
+  minKeepSegmentDuration: number;
+}
+
+export interface AudioScrubConfig {
+  enabled: boolean;
+  thresholdDb: number;
 }
 
 export interface AppConfig {
@@ -49,6 +106,13 @@ export interface AppConfig {
   upload: UploadConfig;
   ai: AIConfig;
   analysis: AnalysisConfig;
+  transcription: TranscriptionConfig;
+  presenterDetection: PresenterDetectionConfig;
+  editAssembly: EditAssemblyConfig;
+  takeSelector: TakeSelectorConfig;
+  wordScorer: WordScorerConfig;
+  mergeAndClean: MergeAndCleanConfig;
+  audioScrub: AudioScrubConfig;
 }
 
 export function loadConfig(configPath?: string): AppConfig {

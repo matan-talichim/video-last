@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { registerStep } from '../engine.js';
+import type { StepContext, StepResult } from '../types.js';
 import type { FFmpegConfig } from '../../utils/config.js';
 import { loadConfig } from '../../utils/config.js';
 import { runFFmpeg, getMediaInfo } from '../../utils/ffmpeg.js';
@@ -480,3 +482,28 @@ export async function runEditAssembly(
     throw err;
   }
 }
+
+// ── Pipeline-compatible wrapper ─────────────────
+
+async function editAssembly(context: StepContext): Promise<StepResult> {
+  const { outputDir, logger } = context;
+  const config = loadConfig();
+
+  try {
+    await runEditAssembly(outputDir, config.ffmpeg, logger);
+    return {
+      outputFile: resolve(outputDir, 'edited.mp4'),
+      success: true,
+      message: 'Edit assembly completed',
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      outputFile: context.currentFile,
+      success: false,
+      message: errorMsg,
+    };
+  }
+}
+
+registerStep('edit-assembly', editAssembly);

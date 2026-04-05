@@ -13,7 +13,11 @@ import { createApiRouter } from './routes/api.js';
 // Register pipeline steps
 import './pipeline/steps/passthrough.js';
 import './pipeline/steps/preprocess.js';
+import './pipeline/steps/presenter-detection.js';
 import './pipeline/steps/transcription.js';
+import './pipeline/steps/merge-and-clean.js';
+import './pipeline/steps/analyze.js';
+import './pipeline/steps/edit-assembly.js';
 
 console.error('DEBUG: all imports loaded, initializing config…');
 

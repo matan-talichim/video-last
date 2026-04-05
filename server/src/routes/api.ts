@@ -245,40 +245,34 @@ export function createApiRouter(config: AppConfig): Router {
       // Get preprocess options from config
       const preprocessStep = config.pipeline.steps.find((s) => s.name === 'preprocess');
       const stepOptions = preprocessStep?.options ?? {};
-      const audioScrubRaw = (config as unknown as Record<string, unknown>).audioScrub as
-        { enabled?: boolean; thresholdDb?: number } | undefined;
       const options = {
         audioSampleRate: (stepOptions.audioSampleRate as number) ?? 16000,
         proxyHeight: (stepOptions.proxyHeight as number) ?? 480,
         proxyFps: (stepOptions.proxyFps as number) ?? 10,
         frameInterval: (stepOptions.frameInterval as number) ?? 5,
         audioScrub: {
-          enabled: audioScrubRaw?.enabled ?? true,
-          thresholdDb: audioScrubRaw?.thresholdDb ?? -26,
+          enabled: config.audioScrub.enabled,
+          thresholdDb: config.audioScrub.thresholdDb,
         },
       };
 
       // Get presenter detection config
-      const pdConfig = (config as unknown as Record<string, unknown>).presenterDetection as
-        { lipThreshold?: number; vadThreshold?: number; buffer?: number; pythonPath?: string } | undefined;
       const presenterConfig = {
-        lipThreshold: pdConfig?.lipThreshold ?? 0.15,
-        vadThreshold: pdConfig?.vadThreshold ?? 0.5,
-        buffer: pdConfig?.buffer ?? 0.25,
-        pythonPath: pdConfig?.pythonPath ?? 'python3',
+        lipThreshold: config.presenterDetection.lipThreshold,
+        vadThreshold: config.presenterDetection.vadThreshold,
+        buffer: config.presenterDetection.buffer,
+        pythonPath: config.presenterDetection.pythonPath,
       };
 
       // Get transcription config
-      const txConfig = (config as unknown as Record<string, unknown>).transcription as
-        { model?: string; language?: string; smartFormat?: boolean; utterances?: boolean; punctuate?: boolean; words?: boolean; paragraphs?: boolean } | undefined;
       const transcriptionConfig = {
-        model: txConfig?.model ?? 'nova-3',
-        language: txConfig?.language ?? 'he',
-        smartFormat: txConfig?.smartFormat ?? true,
-        utterances: txConfig?.utterances ?? true,
-        punctuate: txConfig?.punctuate ?? true,
-        words: txConfig?.words ?? true,
-        paragraphs: txConfig?.paragraphs ?? true,
+        model: config.transcription.model,
+        language: config.transcription.language,
+        smartFormat: config.transcription.smartFormat,
+        utterances: config.transcription.utterances,
+        punctuate: config.transcription.punctuate,
+        words: config.transcription.words,
+        paragraphs: config.transcription.paragraphs,
       };
 
       // Read settings for AI brain selection

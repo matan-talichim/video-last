@@ -28,8 +28,33 @@
         }
       },
       {
-        "name": "passthrough",
+        "name": "presenter-detection",
         "enabled": true,
+        "description": "זיהוי מגיש באמצעות Silero VAD + MediaPipe"
+      },
+      {
+        "name": "transcription",
+        "enabled": true,
+        "description": "תמלול באמצעות Deepgram Nova-3"
+      },
+      {
+        "name": "merge-and-clean",
+        "enabled": true,
+        "description": "מיזוג תמלול, ניקוי וסינון טייקים"
+      },
+      {
+        "name": "analyze",
+        "enabled": true,
+        "description": "ניתוח AI של הסרטון — hooks, מבנה, B-Roll"
+      },
+      {
+        "name": "edit-assembly",
+        "enabled": true,
+        "description": "חיתוך והרכבה FFmpeg — הפקת edited.mp4"
+      },
+      {
+        "name": "passthrough",
+        "enabled": false,
         "description": "מעביר את הקובץ בלי שינוי (לבדיקת pipeline)"
       }
     ]
