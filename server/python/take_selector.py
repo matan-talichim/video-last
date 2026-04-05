@@ -68,7 +68,7 @@ HEBREW_FILLERS = [
 
 # Thresholds (defaults, overridable via config)
 SIMILARITY_THRESHOLD = 0.75
-LOOKBACK_SECONDS = 10.0
+LOOKBACK_SECONDS = 999  # Global comparison — raw footage can have long gaps between takes
 MAX_DUPLICATE_REMOVAL_RATIO = 0.50  # Never remove more than 50% of total presenter words
 SCORING_OVERRIDE_MARGIN = 0.20
 TARGET_WPS = 2.7
@@ -761,8 +761,8 @@ def apply_hard_rejection(words, all_words, already_removed):
             signals += 1
             signal_names.append('non_presenter')
 
-        # SIGNAL 2: speaker_score average < 0.45
-        scores = [w.get('speaker_score', 1.0) for w in take if 'speaker_score' in w]
+        # SIGNAL 2: speaker_score average < 0.45 (ignore -1 = skipped/no data)
+        scores = [w.get('speaker_score', 1.0) for w in take if 'speaker_score' in w and w['speaker_score'] >= 0]
         if scores and sum(scores) / len(scores) < 0.45:
             signals += 1
             signal_names.append('low_speaker_score')
@@ -1015,13 +1015,31 @@ def deduplicate_decisions(decisions, remove_ids):
     cleaned = []
     for reason, ids in reason_groups.items():
         ids.sort()
-        entry = {"ids": ids, "reason": reason}
-        # Attach kept_ids from first matching decision
-        for wid in ids:
-            if wid in kept_map:
-                entry["kept_ids"] = kept_map[wid]
-                break
-        cleaned.append(entry)
+        if reason == "duplicate_take":
+            # Keep duplicate_take decisions SEPARATE per group.
+            # Each group has its own kept_ids — merging loses that info.
+            # Rebuild per-group decisions from kept_map.
+            groups = {}  # kept_ids tuple → list of removed ids
+            ungrouped = []
+            for wid in ids:
+                if wid in kept_map:
+                    key = tuple(sorted(kept_map[wid]))
+                    if key not in groups:
+                        groups[key] = []
+                    groups[key].append(wid)
+                else:
+                    ungrouped.append(wid)
+            for kept_tuple, group_ids in groups.items():
+                kept_list = [k for k in kept_tuple if k not in remove_ids]
+                entry = {"ids": sorted(group_ids), "reason": reason}
+                if kept_list:
+                    entry["kept_ids"] = sorted(kept_list)
+                cleaned.append(entry)
+            if ungrouped:
+                cleaned.append({"ids": sorted(ungrouped), "reason": reason})
+        else:
+            entry = {"ids": ids, "reason": reason}
+            cleaned.append(entry)
 
     return cleaned
 
