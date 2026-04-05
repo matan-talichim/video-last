@@ -42,10 +42,20 @@ INCOMPLETE_ENDINGS = {
 }
 
 # Minimum words per sentence
-MIN_SENTENCE_WORDS = 3
+MIN_SENTENCE_WORDS = 4
 
 # Gap threshold (seconds) for sentence splitting within a take
 SENTENCE_GAP_THRESHOLD = 0.15
+
+# Dedup similarity threshold — only near-identical sentences are removed
+DEDUP_SIMILARITY_THRESHOLD = 0.85
+
+# Words that indicate a fragment (not a complete sentence) when they appear first
+FRAGMENT_STARTS = {
+    "לא", "את", "של", "על", "עם", "הוא", "היא", "ולא",
+    "שהחיסכון", "לך", "שלך", "שלו", "שלה", "שלנו",
+    "גם", "וגם", "או", "כי", "ש", "אבל",
+}
 
 
 def log(msg):
@@ -121,6 +131,26 @@ def split_take_to_sentences(take_words):
     return sentences
 
 
+def filter_fragments(sentence_word_lists):
+    """
+    Remove fragments — sentences whose first word is a function word
+    that indicates an incomplete/broken sentence.
+    """
+    kept = []
+    removed = 0
+    for sent_words in sentence_word_lists:
+        first_word = sent_words[0]["word"].strip()
+        if first_word in FRAGMENT_STARTS:
+            text = " ".join(w["word"] for w in sent_words)
+            log(f"Fragment filtered: \"{text}\" (starts with '{first_word}')")
+            removed += 1
+        else:
+            kept.append(sent_words)
+    if removed:
+        log(f"Fragment filter: removed {removed}, kept {len(kept)}")
+    return kept
+
+
 # ── Step 4: Score each sentence ───────────────────────
 
 def score_sentence(sentence_words):
@@ -182,7 +212,7 @@ def score_sentence(sentence_words):
 def deduplicate_sentences(sentences):
     """
     Compare all sentences using semantic similarity.
-    If two sentences are > 70% similar — keep the one with higher score.
+    If two sentences are > DEDUP_SIMILARITY_THRESHOLD similar — keep the one with higher score.
     """
     from take_selector import semantic_similarity
 
@@ -196,7 +226,7 @@ def deduplicate_sentences(sentences):
         for kept in unique:
             kept_words = kept["text"].split()
             sim = semantic_similarity(sent_words, kept_words)
-            if sim > 0.70:
+            if sim > DEDUP_SIMILARITY_THRESHOLD:
                 is_dup = True
                 log(f"Dedup: removing sentence (score {sent['score']:.2f}) "
                     f"similar to kept (score {kept['score']:.2f}): "
@@ -243,6 +273,8 @@ def build_sentences(words, take_decisions):
     for tid in sorted(takes.keys()):
         take_words = takes[tid]
         sents = split_take_to_sentences(take_words)
+        # Step 3b: Filter fragments
+        sents = filter_fragments(sents)
         for sent_words in sents:
             text = " ".join(w["word"] for w in sent_words)
             word_ids = [w["id"] for w in sent_words]
@@ -275,6 +307,8 @@ def build_sentences(words, take_decisions):
 
     total_raw = len(all_sentences)
     log(f"Raw sentences: {total_raw} from {len(takes)} takes")
+    for idx, s in enumerate(all_sentences):
+        log(f"  raw[{idx}] (score {s['score']:.2f}, {s['word_count']}w): \"{s['text']}\"")
 
     # Step 5: Deduplicate
     unique_sentences = deduplicate_sentences(all_sentences)
