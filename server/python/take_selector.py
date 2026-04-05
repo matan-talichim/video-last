@@ -218,6 +218,7 @@ def detect_micro_stutters(presenter_words):
     Allows skipping up to 1 non-matching word between repetitions
     (handles cases where chronological sort inserted a word between stutters).
     """
+    print(f"[stutter] Starting with {len(presenter_words)} words", file=sys.stderr)
     decisions = []
     remove_ids = set()
     consumed = set()  # track indices already consumed in a stutter group
@@ -267,8 +268,10 @@ def detect_micro_stutters(presenter_words):
                 "reason": "stutter",
                 "kept_ids": [group[-1]["id"]],
             })
-            print(f"[stutter] Found group: ids={[g['id'] for g in group]} word='{text}', removing={to_remove}, next i={j}", file=sys.stderr)
-            i = j
+            print(f"[stutter] Found group: ids={[g['id'] for g in group]} word='{text}', removing={to_remove}", file=sys.stderr)
+            # Resume right after last group member, not at j —
+            # otherwise words "skipped" during lookahead are never checked as stutter starts.
+            i = group_indices[-1] + 1
         else:
             i += 1
 
@@ -883,11 +886,13 @@ def apply_coarticulation_protection(remove_ids, presenter_words, decisions):
     production cues, or abandoned takes. If a word is part of a group
     removal → coarticulation does NOT restore it.
     """
-    # Build set of word IDs that belong to group removals (not individual)
-    group_removal_reasons = {"duplicate_take", "production_cue", "abandoned_take", "false_start"}
+    # Build set of word IDs exempt from coarticulation protection.
+    # Group removals + stutters: stutters are duplicates by definition,
+    # so the repeated word should always be removable regardless of gap to neighbour.
+    exempt_reasons = {"duplicate_take", "production_cue", "abandoned_take", "false_start", "stutter"}
     group_removal_ids = set()
     for dec in decisions:
-        if dec["reason"] in group_removal_reasons:
+        if dec["reason"] in exempt_reasons:
             group_removal_ids.update(dec["ids"])
 
     restored = set()
@@ -1154,6 +1159,11 @@ def main():
 
     # 8.5. Candidates already built in step 0 (before removals)
 
+    # Count stutter groups before deduplication (which merges all stutters into 1 entry)
+    stutter_group_count = sum(1 for d in all_decisions
+                             if d["reason"] == "stutter"
+                             and any(wid in all_remove_ids for wid in d["ids"]))
+
     # 9. Deduplicate and clean decisions (priority-based conflict resolution)
     all_decisions = deduplicate_decisions(all_decisions, all_remove_ids)
 
@@ -1167,7 +1177,7 @@ def main():
         "duplicates_found": reason_counts.get("duplicate_take", 0),
         "false_starts": reason_counts.get("false_start", 0),
         "production_cues": reason_counts.get("production_cue", 0),
-        "stutters": reason_counts.get("stutter", 0),
+        "stutters": stutter_group_count,
         "abandoned_takes": reason_counts.get("abandoned_take", 0),
         "internal_retakes": reason_counts.get("internal_retake", 0),
         "hard_rejections": reason_counts.get("hard_reject", 0),

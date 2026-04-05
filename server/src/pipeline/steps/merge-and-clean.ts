@@ -408,7 +408,7 @@ function buildStructuredText(
       const differentTake = w.take_id !== undefined && next.take_id !== undefined
         && w.take_id !== next.take_id;
 
-      if (differentTake || gap > 1.0) {
+      if (differentTake) {
         takeNumber++;
         parts.push(`\n\n--- TAKE ${takeNumber} (${gap.toFixed(1)}s gap) ---\n`);
       }
