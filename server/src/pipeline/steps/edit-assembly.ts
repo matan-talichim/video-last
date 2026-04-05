@@ -155,7 +155,7 @@ export async function runEditAssembly(
   // Read padding from config
   const config = loadConfig();
   const editConfig = (config as unknown as Record<string, unknown>).editAssembly as
-    { paddingStart?: number; paddingEnd?: number } | undefined;
+    { paddingStart?: number; paddingEnd?: number; denoiseNoiseFloor?: number; audioCrossfade?: number } | undefined;
   const paddingStart = editConfig?.paddingStart ?? 0.03;
   const paddingEnd = editConfig?.paddingEnd ?? 0.15;
 
@@ -191,6 +191,19 @@ export async function runEditAssembly(
 
     if (!cleanedTranscript.keep_segments?.length) {
       throw new Error('cleaned_transcript has no keep_segments');
+    }
+
+    // Quality Gate check — block edit if quality gate failed
+    const quality = (cleanedTranscript as Record<string, unknown>).quality as
+      { passed?: boolean; blocks?: string[]; warnings?: string[] } | undefined;
+    if (quality && quality.passed === false) {
+      const blockReasons = (quality.blocks ?? []).join('; ');
+      throw new Error(`Quality Gate BLOCKED edit-assembly: ${blockReasons}`);
+    }
+    if (quality?.warnings?.length) {
+      logger.warn('Quality Gate warnings present, proceeding with edit', {
+        warnings: quality.warnings,
+      });
     }
 
     // Extract word-level timestamps for smart padding
@@ -282,11 +295,13 @@ export async function runEditAssembly(
         duration: segDuration,
       });
 
-      // Build audio filter chain: denoise → fade-in → fade-out
-      const denoise = 'afftdn=nf=-20:tn=1:om=o';
+      // Build audio filter chain: denoise → loudness normalization → fade-in → fade-out
+      const denoiseNf = editConfig?.denoiseNoiseFloor ?? -20;
+      const denoise = `afftdn=nf=${denoiseNf}:tn=1:om=o`;
+      const loudnorm = 'loudnorm=I=-16:TP=-1.5:LRA=11';
       const fadeIn = `afade=t=in:st=0:d=${DEFAULT_FADE_DURATION}`;
       const fadeOut = `afade=t=out:st=${Math.max(0, segDuration - DEFAULT_FADE_DURATION)}:d=${DEFAULT_FADE_DURATION}`;
-      const audioFilter = `${denoise},${fadeIn},${fadeOut}`;
+      const audioFilter = `${denoise},${loudnorm},${fadeIn},${fadeOut}`;
 
       // Use original fps (fallback to 30)
       const fps = mediaInfo.fps > 0 ? Math.round(mediaInfo.fps) : 30;
@@ -338,18 +353,61 @@ export async function runEditAssembly(
     writeFileSync(concatListPath, concatContent, 'utf-8');
 
     const outputPath = resolve(jobDir, 'edited.mp4');
+    const audioCrossfade = editConfig?.audioCrossfade ?? 0;
 
-    logger.info('Concatenating segments', { outputPath });
+    if (audioCrossfade > 0 && segmentFiles.length >= 2) {
+      // Audio crossfade: build filter_complex with acrossfade between segments
+      logger.info('Concatenating with audio crossfade', { outputPath, crossfadeMs: audioCrossfade * 1000 });
 
-    const concatArgs = [
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', concatListPath,
-      '-c', 'copy',
-      outputPath,
-    ];
+      // Build input args
+      const inputArgs: string[] = [];
+      for (const f of segmentFiles) {
+        inputArgs.push('-i', f);
+      }
 
-    await runFFmpeg(concatArgs, ffmpegConfig, logger);
+      // Build audio crossfade chain: [0:a][1:a] acrossfade → [a01], [a01][2:a] acrossfade → [a012], ...
+      const filterParts: string[] = [];
+      let prevLabel = '[0:a]';
+      for (let i = 1; i < segmentFiles.length; i++) {
+        const outLabel = `[a${i}]`;
+        filterParts.push(`${prevLabel}[${i}:a]acrossfade=d=${audioCrossfade}:c1=tri:c2=tri${outLabel}`);
+        prevLabel = outLabel;
+      }
+
+      // Video: just concat with stream copy approach via concat filter
+      const videoInputs = segmentFiles.map((_, i) => `[${i}:v]`).join('');
+      filterParts.push(`${videoInputs}concat=n=${segmentFiles.length}:v=1:a=0[vout]`);
+
+      const filterComplex = filterParts.join(';');
+
+      const concatArgs = [
+        ...inputArgs,
+        '-filter_complex', filterComplex,
+        '-map', '[vout]',
+        '-map', prevLabel,
+        '-c:v', 'libx264',
+        '-preset', DEFAULT_PRESET,
+        '-crf', String(DEFAULT_CRF),
+        '-c:a', 'aac',
+        '-b:a', DEFAULT_AUDIO_BITRATE,
+        outputPath,
+      ];
+
+      await runFFmpeg(concatArgs, ffmpegConfig, logger);
+    } else {
+      // Simple concat with stream copy (fast, no crossfade)
+      logger.info('Concatenating segments', { outputPath });
+
+      const concatArgs = [
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', concatListPath,
+        '-c', 'copy',
+        outputPath,
+      ];
+
+      await runFFmpeg(concatArgs, ffmpegConfig, logger);
+    }
 
     // ── Step 6: Cleanup ──
 

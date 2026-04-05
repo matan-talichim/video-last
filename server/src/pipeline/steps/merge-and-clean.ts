@@ -1799,6 +1799,187 @@ function buildSegments(
   return { keepSegments, removeSegments };
 }
 
+// ── Step 3b: Split segments that contain long internal silences ──
+
+function splitInternalSilences(
+  segments: KeepSegment[],
+  allWords: Word[],
+  config: { silenceThresholdMs: number; minSegmentAfterSplit: number },
+  logger?: Logger,
+): KeepSegment[] {
+  const { silenceThresholdMs, minSegmentAfterSplit } = config;
+  const silenceThreshold = silenceThresholdMs / 1000; // convert to seconds
+  const wordMap = new Map(allWords.map((w) => [w.id, w]));
+  const result: KeepSegment[] = [];
+  let splitCount = 0;
+
+  for (const seg of segments) {
+    const words = seg.word_ids
+      .map((id) => wordMap.get(id))
+      .filter((w): w is Word => w !== undefined)
+      .sort((a, b) => a.start - b.start);
+
+    if (words.length < 2) {
+      result.push(seg);
+      continue;
+    }
+
+    // Find internal gaps that exceed threshold
+    const splitPoints: number[] = [];
+    for (let i = 1; i < words.length; i++) {
+      const gap = words[i]!.start - words[i - 1]!.end;
+      if (gap >= silenceThreshold) {
+        splitPoints.push(i);
+      }
+    }
+
+    if (splitPoints.length === 0) {
+      result.push(seg);
+      continue;
+    }
+
+    // Split at each point, but check minimum duration
+    const groups: Word[][] = [];
+    let start = 0;
+    for (const sp of splitPoints) {
+      groups.push(words.slice(start, sp));
+      start = sp;
+    }
+    groups.push(words.slice(start));
+
+    // Validate: all sub-segments must meet minimum duration
+    const allMeetMinimum = groups.every((g) => {
+      if (g.length === 0) return false;
+      const dur = g[g.length - 1]!.end - g[0]!.start;
+      return dur >= minSegmentAfterSplit;
+    });
+
+    if (!allMeetMinimum) {
+      // Don't split — would create too-short segments
+      result.push(seg);
+      continue;
+    }
+
+    // Perform the split
+    for (const group of groups) {
+      if (group.length === 0) continue;
+      result.push({
+        start: group[0]!.start,
+        end: group[group.length - 1]!.end,
+        word_ids: group.map((w) => w.id),
+      });
+    }
+    splitCount += splitPoints.length;
+  }
+
+  if (splitCount > 0 && logger) {
+    logger.info('Split internal silences', {
+      originalSegments: segments.length,
+      newSegments: result.length,
+      splitsMade: splitCount,
+      silenceThresholdMs,
+      minSegmentAfterSplit,
+    });
+  }
+
+  return result;
+}
+
+// ── Quality Gate — validate segments before edit-assembly ──
+
+interface QualityGateResult {
+  passed: boolean;
+  blocks: string[];
+  warnings: string[];
+}
+
+function qualityGate(
+  keepSegments: KeepSegment[],
+  presenterWordCount: number,
+  selectedWordCount: number,
+  allWords: Word[],
+  logger?: Logger,
+): QualityGateResult {
+  const blocks: string[] = [];
+  const warnings: string[] = [];
+
+  // BLOCK checks
+  if (keepSegments.length === 0) {
+    blocks.push('No keep segments — nothing to cut');
+  }
+
+  const totalKeepDuration = keepSegments.reduce((sum, s) => sum + (s.end - s.start), 0);
+  if (totalKeepDuration < 5) {
+    blocks.push(`Total keep duration too short: ${totalKeepDuration.toFixed(1)}s (minimum 5s)`);
+  }
+
+  // Check chronological order
+  for (let i = 1; i < keepSegments.length; i++) {
+    if (keepSegments[i]!.start < keepSegments[i - 1]!.end) {
+      blocks.push(`Segments not chronological: seg[${i - 1}].end=${keepSegments[i - 1]!.end.toFixed(2)} > seg[${i}].start=${keepSegments[i]!.start.toFixed(2)}`);
+      break;
+    }
+  }
+
+  // Coverage check (block)
+  if (presenterWordCount > 0) {
+    const coverage = selectedWordCount / presenterWordCount;
+    if (coverage < 0.35) {
+      blocks.push(`Coverage critically low: ${(coverage * 100).toFixed(0)}% (minimum 35%)`);
+    }
+  }
+
+  // WARNING checks
+  if (presenterWordCount > 0) {
+    const coverage = selectedWordCount / presenterWordCount;
+    if (coverage >= 0.35 && coverage < 0.50) {
+      warnings.push(`Coverage below target: ${(coverage * 100).toFixed(0)}% (target 55-80%)`);
+    }
+  }
+
+  if (keepSegments.length > 0 && keepSegments.length < 4) {
+    warnings.push(`Very few segments: ${keepSegments.length} (consider retrying for more content)`);
+  }
+
+  // Check for stutter within segments (same word repeated consecutively)
+  const wordMap = new Map(allWords.map((w) => [w.id, w]));
+  for (let si = 0; si < keepSegments.length; si++) {
+    const seg = keepSegments[si]!;
+    const words = seg.word_ids
+      .map((id) => wordMap.get(id))
+      .filter((w): w is Word => w !== undefined);
+    for (let i = 1; i < words.length; i++) {
+      if (words[i]!.word?.trim().toLowerCase() === words[i - 1]!.word?.trim().toLowerCase() &&
+          words[i]!.word?.trim().length > 1) {
+        warnings.push(`Stutter in segment ${si}: "${words[i]!.word}" repeated at ${words[i]!.start.toFixed(2)}s`);
+        break; // one warning per segment is enough
+      }
+    }
+  }
+
+  // Check for large jump cuts (gap > 60s between segments)
+  for (let i = 1; i < keepSegments.length; i++) {
+    const gap = keepSegments[i]!.start - keepSegments[i - 1]!.end;
+    if (gap > 60) {
+      warnings.push(`Large jump cut: ${gap.toFixed(0)}s gap between segments ${i - 1} and ${i}`);
+    }
+  }
+
+  const passed = blocks.length === 0;
+
+  if (logger) {
+    if (blocks.length > 0) {
+      logger.error('Quality Gate BLOCKED', { blocks, warnings });
+    } else if (warnings.length > 0) {
+      logger.warn('Quality Gate passed with warnings', { warnings });
+    } else {
+      logger.info('Quality Gate passed');
+    }
+  }
+
+  return { passed, blocks, warnings };
+}
+
 /**
  * Step 2.85: Find and remove repeated phrases BETWEEN consecutive segments.
  * If the same 3+ word phrase appears at the end of one segment and
@@ -2073,7 +2254,42 @@ Return ALL sentences you want (both previously selected AND new additions).`;
 
       const retrySelectedWordIds = new Set(narrativeRanges.flatMap(r => r.ids));
       const retryCoverage = presenterWords.filter(w => retrySelectedWordIds.has(w.id)).length / presenterWords.length;
-      logger.info('Coverage after retry', { coverage: `${(retryCoverage * 100).toFixed(0)}%` });
+      logger.info('Coverage after retry 1', { coverage: `${(retryCoverage * 100).toFixed(0)}%` });
+
+      // Retry 2: if still below 55% after first retry
+      if (retryCoverage < 0.55) {
+        logger.warn('Coverage still low after retry 1, attempting retry 2', {
+          coverage: `${(retryCoverage * 100).toFixed(0)}%`,
+        });
+
+        const selectedSet2 = new Set(selectedIds);
+        const unselected2 = sentenceMenu.sentences
+          .filter(s => s.is_best_in_group && !selectedSet2.has(s.id))
+          .map(s => `${s.id} (${s.word_count} words, score ${s.score}): "${s.text}"`)
+          .join('\n');
+
+        const retryPreamble2 = `Your TWO previous selections still only covered ${Math.round(retryCoverage * 100)}% — below the 55% minimum.
+
+UNSELECTED SENTENCES still available:
+${unselected2}
+
+This is the FINAL retry. Be aggressive — include all sentences that contribute meaningful content.
+Target: at least ${Math.ceil(presenterWords.length * 0.65)} words total.
+Return ALL sentences you want (both previously selected AND new additions).`;
+
+        const retry2 = await runAISentenceSelection(menuText, contextBlock, brain, logger, retryPreamble2);
+        selectedIds = retry2.selectedIds;
+        narrativeRanges = sentenceSelectionToKeepRanges(selectedIds, sentenceMenu, logger);
+        usage1 = {
+          inputTokens: usage1.inputTokens + retry2.usage.inputTokens,
+          outputTokens: usage1.outputTokens + retry2.usage.outputTokens,
+          estimatedCostUSD: usage1.estimatedCostUSD + retry2.usage.estimatedCostUSD,
+        };
+
+        const retry2WordIds = new Set(narrativeRanges.flatMap(r => r.ids));
+        const retry2Coverage = presenterWords.filter(w => retry2WordIds.has(w.id)).length / presenterWords.length;
+        logger.info('Coverage after retry 2', { coverage: `${(retry2Coverage * 100).toFixed(0)}%` });
+      }
     }
 
     // Reduced post-processing for sentence-menu path:
@@ -2100,6 +2316,20 @@ Return ALL sentences you want (both previously selected AND new additions).`;
       outputTokens: usage1.outputTokens + usage2.outputTokens,
       estimatedCostUSD: usage1.estimatedCostUSD + usage2.estimatedCostUSD,
     };
+
+    // Post-processing coverage check — if post-processing dropped coverage below 55%,
+    // fall back to pre-post-processing ranges (narrativeRanges before starred/cross-ref)
+    const postProcWordIds = new Set(finalRanges.flatMap(r => r.ids));
+    const postProcCoverage = presenterWords.length > 0
+      ? presenterWords.filter(w => postProcWordIds.has(w.id)).length / presenterWords.length
+      : 1;
+    if (postProcCoverage < 0.55 && initialCoverage >= 0.55) {
+      logger.warn('Post-processing dropped coverage below threshold, reverting to pre-post-processing ranges', {
+        beforePostProc: `${(initialCoverage * 100).toFixed(0)}%`,
+        afterPostProc: `${(postProcCoverage * 100).toFixed(0)}%`,
+      });
+      finalRanges = narrativeRanges;
+    }
 
   } else {
     // ── LEGACY PATH: Word-level AI selection (fallback) ──
@@ -2176,9 +2406,22 @@ RETURN FORMAT — JSON ONLY:
   // Step 5: Build keep/remove segments from word-level data
   const { keepSegments: rawKeepSegments, removeSegments } = buildSegments(merged.words, effectiveRemoveRanges);
 
-  // Filter out invalid segments (start >= end) and micro-segments (< 0.8s)
+  // Step 5b: Split segments with long internal silences
+  const fullConfig = loadConfig() as unknown as Record<string, unknown>;
+  const mergeCleanConfig = (fullConfig.mergeAndClean ?? {}) as Record<string, unknown>;
+  const silenceSplitSegments = splitInternalSilences(
+    rawKeepSegments,
+    merged.words,
+    {
+      silenceThresholdMs: (mergeCleanConfig.silenceThresholdMs as number) ?? 800,
+      minSegmentAfterSplit: (mergeCleanConfig.minSegmentAfterSplit as number) ?? 1.5,
+    },
+    logger,
+  );
+
+  // Filter out invalid segments (start >= end) and micro-segments (< 2.0s)
   const MIN_KEEP_SEGMENT_DURATION = 2.0;
-  const keepSegments = rawKeepSegments.filter((seg) => {
+  const keepSegments = silenceSplitSegments.filter((seg) => {
     if (seg.start >= seg.end) {
       logger.warn('Skipping invalid segment: start >= end', { start: seg.start, end: seg.end, duration: Math.round((seg.end - seg.start) * 1000) / 1000 });
       return false;
@@ -2219,11 +2462,19 @@ RETURN FORMAT — JSON ONLY:
     }
   }
 
+  // Step 6: Quality Gate — validate before edit-assembly
+  const qualityResult = qualityGate(keepSegments, presenterWordCount, selectedByAI, merged.words, logger);
+
   // Build final output
   const cleanedTranscript = {
     words: merged.words,
     keep_segments: keepSegments,
     remove_segments: removeSegments,
+    quality: {
+      passed: qualityResult.passed,
+      blocks: qualityResult.blocks,
+      warnings: qualityResult.warnings,
+    },
     stats: {
       original_words: merged.stats.total_words,
       presenter_words: merged.stats.presenter_words,

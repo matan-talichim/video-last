@@ -67,7 +67,9 @@
     "crf": 18,
     "preset": "medium",
     "audioBitrate": "192k",
-    "minSegmentDuration": 0.1
+    "minSegmentDuration": 0.1,
+    "denoiseNoiseFloor": -20,
+    "audioCrossfade": 0.06
   },
   "takeSelector": {
     "enabled": true,
@@ -78,6 +80,10 @@
   "wordScorer": {
     "thresholdPresenter": 0.50,
     "thresholdReject": 0.35
+  },
+  "mergeAndClean": {
+    "silenceThresholdMs": 800,
+    "minSegmentAfterSplit": 1.5
   },
   "audioScrub": {
     "enabled": true,
