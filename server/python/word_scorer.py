@@ -73,9 +73,12 @@ def compute_visual_score(word, presenter_segments):
 def compute_speaker_score(word):
     """
     WeSpeaker similarity — already computed by speaker_verify.
-    If not available, returns 0.5 (neutral).
+    If not available or skipped (-1), returns 0.5 (neutral).
     """
-    return word.get("speaker_score", 0.5)
+    score = word.get("speaker_score", 0.5)
+    if score < 0:
+        return 0.5  # -1 means skipped/no data — treat as neutral
+    return score
 
 
 def compute_energy_score(word):
@@ -110,6 +113,8 @@ def make_decision(word):
     - Otherwise use weighted final_score with thresholds 0.50 / 0.35
     """
     speaker = word.get("speaker_score", word.get("speaker_score_norm", 0.5))
+    if speaker < 0:
+        speaker = 0.5  # -1 means skipped/no data — don't override
 
     if speaker > 0.60:
         return "presenter"
