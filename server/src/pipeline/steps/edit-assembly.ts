@@ -41,13 +41,33 @@ interface EditResult {
   compressionRatio: string;
 }
 
-// ── Config defaults ──────────────────────────────
+// ── Config defaults (read from config, fallback to hardcoded) ──
 
-const DEFAULT_FADE_DURATION = 0.03; // 30ms
-const DEFAULT_CRF = 18;
-const DEFAULT_PRESET = 'medium';
-const DEFAULT_AUDIO_BITRATE = '192k';
-const MIN_SEGMENT_DURATION = 0.1;   // skip segments shorter than 100ms
+function getEditAssemblyConfig() {
+  const config = loadConfig();
+  const ea = (config as unknown as Record<string, unknown>).editAssembly as {
+    fadeDuration?: number;
+    crf?: number;
+    preset?: string;
+    audioBitrate?: string;
+    minSegmentDuration?: number;
+  } | undefined;
+  return {
+    fadeDuration: ea?.fadeDuration ?? 0.03,
+    crf: ea?.crf ?? 18,
+    preset: ea?.preset ?? 'medium',
+    audioBitrate: ea?.audioBitrate ?? '192k',
+    minSegmentDuration: ea?.minSegmentDuration ?? 0.1,
+  };
+}
+
+// Backward-compatible constants (used throughout the file)
+const _eaConfig = getEditAssemblyConfig();
+const DEFAULT_FADE_DURATION = _eaConfig.fadeDuration;
+const DEFAULT_CRF = _eaConfig.crf;
+const DEFAULT_PRESET = _eaConfig.preset;
+const DEFAULT_AUDIO_BITRATE = _eaConfig.audioBitrate;
+const MIN_SEGMENT_DURATION = _eaConfig.minSegmentDuration;
 
 // ── Helpers ──────────────────────────────────────
 

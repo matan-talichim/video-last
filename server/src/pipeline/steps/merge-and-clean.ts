@@ -98,6 +98,64 @@ interface AICleanResult {
   keep_ranges: KeepRange[];
 }
 
+// ── Sentence Builder types ──────────────────────
+
+interface SentenceScores {
+  speaker: number;
+  asr: number;
+  energy: number;
+  completeness: number;
+  gap_penalty: number;
+  total: number;
+}
+
+interface Sentence {
+  id: string;
+  text: string;
+  word_ids: number[];
+  take_id: number;
+  start: number;
+  end: number;
+  word_count: number;
+  score: number;
+  scores: SentenceScores;
+  group_id: string;
+  is_best_in_group: boolean;
+  alternatives: number;
+  tags: string[];
+  has_forbidden_start: boolean;
+  is_merged: boolean;
+}
+
+interface SentenceGroup {
+  group_id: string;
+  representative_text: string;
+  version_count: number;
+  best_sentence_id: string;
+  all_sentence_ids: string[];
+}
+
+interface SentenceMenu {
+  sentences: Sentence[];
+  groups: SentenceGroup[];
+  stats: {
+    total_words_in: number;
+    presenter_words: number;
+    total_sentences: number;
+    unique_groups: number;
+    best_sentences: number;
+    best_sentences_total_words: number;
+    coverage_of_presenter: number;
+    tag_distribution: Record<string, number>;
+    processing_time_ms: number;
+  };
+}
+
+interface AISentenceSelectionResult {
+  selected: string[];
+  order?: string[];
+}
+
 function buildTakeSelectorHints(takeDecisions: TakeDecisions): string {
   if (!takeDecisions || takeDecisions.decisions.length === 0) {
     return 'No automated issues detected.';
@@ -298,6 +356,7 @@ async function runAlignWords(
 async function runTakeSelector(
   jobDir: string,
   logger: Logger,
+  videoType: string = 'general',
 ): Promise<TakeDecisions> {
   const mergedPath = join(jobDir, 'merged_transcript.json');
   const gatedAudioPath = join(jobDir, 'audio_gated.wav');
@@ -323,7 +382,7 @@ async function runTakeSelector(
     scriptPath,
     '--words', mergedPath,
     '--output', outputPath,
-    '--video-type', 'general',
+    '--video-type', videoType,
   ];
 
   if (existsSync(audioPath)) {
@@ -355,6 +414,239 @@ async function runTakeSelector(
   logger.info(`Take selector: ${result.stats.total_removed_words} words marked for removal (${result.stats.duplicates_found} duplicates, ${result.stats.false_starts} false_starts, ${result.stats.production_cues} cues, ${result.stats.stutters} stutters, ${result.stats.abandoned_takes} abandoned)`);
 
   return result;
+}
+
+// ── Step 1.75: Sentence Builder ─────────────────
+
+async function runSentenceBuilder(
+  jobDir: string,
+  logger: Logger,
+): Promise<SentenceMenu> {
+  const mergedPath = join(jobDir, 'merged_transcript.json');
+  const takeDecisionsPath = join(jobDir, 'take_decisions.json');
+  const outputPath = join(jobDir, 'sentence_menu.json');
+
+  const scriptPath = resolve('python', 'sentence_builder.py');
+
+  const config = loadConfig();
+  const pdConfig = (config as unknown as Record<string, unknown>).presenterDetection as
+    { pythonPath?: string } | undefined;
+  const pythonPath = pdConfig?.pythonPath ?? 'python3';
+
+  const tsConfig = (config as unknown as Record<string, unknown>).takeSelector as
+    { similarityThreshold?: number } | undefined;
+
+  const args = [
+    scriptPath,
+    '--merged', mergedPath,
+    '--take-decisions', takeDecisionsPath,
+    '--output', outputPath,
+  ];
+
+  if (tsConfig?.similarityThreshold !== undefined) {
+    args.push('--similarity-threshold', String(tsConfig.similarityThreshold));
+  }
+
+  logger.info('Running sentence_builder.py', { mergedPath });
+
+  const { stdout, stderr } = await execFileAsync(pythonPath, args, {
+    timeout: 60000,
+  });
+
+  if (stderr) {
+    logger.debug('sentence_builder.py stderr', { stderr: stderr.trim() });
+  }
+
+  const result = JSON.parse(stdout) as SentenceMenu;
+
+  logger.info(`Sentence builder: ${result.stats.unique_groups} groups, ${result.stats.best_sentences} best sentences, coverage ${Math.round(result.stats.coverage_of_presenter * 100)}%`);
+
+  return result;
+}
+
+// ── Step 1.6: Filler detection ──────────────────
+
+async function runFillerDetector(
+  jobDir: string,
+  logger: Logger,
+): Promise<void> {
+  const mergedPath = join(jobDir, 'merged_transcript.json');
+  const scriptPath = resolve('python', 'filler_detector.py');
+
+  const config = loadConfig();
+  const pdConfig = (config as unknown as Record<string, unknown>).presenterDetection as
+    { pythonPath?: string } | undefined;
+  const pythonPath = pdConfig?.pythonPath ?? 'python3';
+
+  logger.info('Running filler_detector.py');
+
+  const { stderr } = await execFileAsync(pythonPath, [
+    scriptPath,
+    '--merged', mergedPath,
+    '--output', mergedPath,  // Overwrite in place — adds is_filler field
+  ], {
+    timeout: 30000,
+  });
+
+  if (stderr) {
+    logger.debug('filler_detector.py stderr', { stderr: stderr.trim() });
+  }
+
+  logger.info('Filler detection completed');
+}
+
+// ── Build AI prompt from sentence menu ──────────
+
+function buildSentenceMenuText(menu: SentenceMenu): string {
+  const lines: string[] = ['SENTENCE MENU:', ''];
+
+  const bestSentences = menu.sentences
+    .filter(s => s.is_best_in_group)
+    .sort((a, b) => a.start - b.start);
+
+  for (const s of bestSentences) {
+    const tagsStr = s.tags.length > 0 ? ` [${s.tags.join(', ')}]` : '';
+    const altStr = s.alternatives > 0 ? `, ${s.alternatives} alternatives` : '';
+    const warnStr = s.has_forbidden_start ? ' ⚠ STARTS_MID_SENTENCE' : '';
+    const mergedStr = s.is_merged ? ' [MERGED]' : '';
+
+    lines.push(
+      `${s.id} (score ${s.score}, ${s.word_count} words, take ${s.take_id}${altStr}${tagsStr}${warnStr}${mergedStr}): "${s.text}"`
+    );
+  }
+
+  lines.push('');
+  lines.push(`Total: ${bestSentences.length} sentences available`);
+
+  return lines.join('\n');
+}
+
+// ── AI Sentence Selection (new approach) ────────
+
+const SENTENCE_MENU_PROMPT = `You are the world's best direct-response copywriter AND video editor combined.
+
+You receive a SENTENCE MENU — pre-built complete sentences extracted from a raw marketing video.
+Each sentence is a COMPLETE thought from a single take. Your job is simple:
+SELECT the sentences that build the MOST COMPELLING MARKETING VIDEO.
+
+THE MENU:
+Each sentence has: ID, quality score, word count, take number, and structural tags.
+Tags tell you the role: HOOK, PROBLEM, SOLUTION, PROOF, CTA.
+
+YOUR TASK:
+1. Read ALL sentences in the menu
+2. Select sentences that cover the FULL marketing message:
+   ✓ Hook (opening that grabs attention)
+   ✓ Problem (what the viewer struggles with)
+   ✓ Solution (what you offer)
+   ✓ Mechanism (how it works)
+   ✓ Proof/Guarantee (why trust you)
+   ✓ CTA (what to do next)
+3. Ensure CHRONOLOGICAL ORDER — earlier sentences come first
+4. Target at least 55% coverage of available content
+
+RULES:
+- Select ONLY sentence IDs from the menu — do NOT invent new IDs
+- Sentences marked ⚠ STARTS_MID_SENTENCE should be AVOIDED unless no better option exists
+- Prefer higher-score sentences when choosing between alternatives
+- If a sentence has alternatives, the menu already shows you the BEST version
+- Include EVERY unique idea — skip only true duplicates
+- Order must be chronological (by sentence start time)
+
+{{CONTEXT}}
+
+RETURN FORMAT — JSON ONLY:
+{
+  "selected": ["S1", "S3", "S5", "S7", "S11"],
+  "reasoning": "Selected hook S1, problem S3, solution S5, proof S7, CTA S11 — full funnel coverage"
+}
+
+Sentence Menu:
+`;
+
+async function runAISentenceSelection(
+  menuText: string,
+  contextBlock: string,
+  brain: AIBrain,
+  logger: Logger,
+  retryPreamble?: string,
+): Promise<{ selectedIds: string[]; usage: AIUsage }> {
+  const prompt = SENTENCE_MENU_PROMPT.replace('{{CONTEXT}}', contextBlock);
+  const userPrompt = (retryPreamble ? retryPreamble + '\n\n' : '') + prompt + menuText;
+
+  const aiConfig = loadConfig();
+  const aiSettings = (aiConfig as unknown as Record<string, unknown>).ai as
+    { timeout?: number; maxTokens?: number } | undefined;
+
+  logger.info('AI Sentence Selection: selecting from menu', { brain });
+
+  let data: AISentenceSelectionResult;
+  let usage: AIUsage;
+
+  try {
+    const result = await askAIJSON<AISentenceSelectionResult>(userPrompt, {
+      brain,
+      maxTokens: aiSettings?.maxTokens ?? 2048,
+      timeout: aiSettings?.timeout ?? 60000,
+      logger,
+    });
+    data = result.data;
+    usage = result.usage;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn('AI Sentence Selection returned non-JSON, retrying', { error: message });
+
+    const retryPrompt = 'You must return ONLY JSON. No text before or after.\n\n' + userPrompt;
+    const retryResult = await askAIJSON<AISentenceSelectionResult>(retryPrompt, {
+      brain,
+      maxTokens: aiSettings?.maxTokens ?? 2048,
+      timeout: aiSettings?.timeout ?? 60000,
+      logger,
+    });
+    data = retryResult.data;
+    usage = retryResult.usage;
+  }
+
+  const selectedIds = data.selected || data.order || [];
+  logger.info('AI Sentence Selection completed', {
+    selectedCount: selectedIds.length,
+  });
+
+  return { selectedIds, usage };
+}
+
+/**
+ * Convert sentence selection to keep_ranges (word IDs) for downstream compatibility.
+ */
+function sentenceSelectionToKeepRanges(
+  selectedIds: string[],
+  menu: SentenceMenu,
+  logger: Logger,
+): KeepRange[] {
+  const sentenceMap = new Map<string, Sentence>();
+  for (const s of menu.sentences) {
+    sentenceMap.set(s.id, s);
+  }
+
+  const keepRanges: KeepRange[] = [];
+
+  for (const sid of selectedIds) {
+    const sentence = sentenceMap.get(sid);
+    if (!sentence) {
+      logger.warn('AI selected unknown sentence ID, skipping', { id: sid });
+      continue;
+    }
+
+    keepRanges.push({
+      ids: sentence.word_ids,
+      reason: `${sentence.tags.join('/') || 'content'} — ${sentence.text.substring(0, 50)}`,
+    });
+  }
+
+  // Sort by first word ID to ensure chronological order
+  keepRanges.sort((a, b) => (a.ids[0] ?? 0) - (b.ids[0] ?? 0));
+
+  return keepRanges;
 }
 
 // ── Step 2: Semantic cleanup (AI) ───────────────
@@ -1593,14 +1885,62 @@ export async function runMergeAndClean(
     },
   });
 
+  // Read job settings (template, videoType, targetDuration)
+  const settingsPath = join(jobDir, 'settings.json');
+  let videoType = 'general';
+  let targetDuration = 'auto';
+  let template = '';
+  if (existsSync(settingsPath)) {
+    try {
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as {
+        videoType?: string;
+        targetDuration?: string;
+        template?: string;
+      };
+      videoType = settings.videoType ?? 'general';
+      targetDuration = settings.targetDuration ?? 'auto';
+      template = settings.template ?? '';
+      logger.info('Job settings loaded', { videoType, targetDuration, templateLength: template.length });
+    } catch {
+      logger.warn('Failed to read settings.json, using defaults');
+    }
+  }
+
   // Step 1: Merge
   let merged = await runMerge(jobDir, logger);
 
   // Step 1.25: WhisperX alignment (improve word timestamps)
   merged = await runAlignWords(jobDir, logger);
 
+  // Step 1.3: Recalculate take_ids using corrected WhisperX timestamps
+  // The initial take_ids from merge_transcript.py used pre-alignment timestamps.
+  // After WhisperX correction, gaps may have shifted, so we recompute.
+  {
+    const TAKE_GAP_THRESHOLD = 0.5;
+    let takeId = 0;
+    const words = merged.words;
+    if (words.length > 0) {
+      words[0]!.take_id = 0;
+      for (let i = 1; i < words.length; i++) {
+        const gap = words[i]!.start - words[i - 1]!.end;
+        if (gap > TAKE_GAP_THRESHOLD) {
+          takeId++;
+        }
+        words[i]!.take_id = takeId;
+      }
+      logger.info('Recalculated take_ids after WhisperX alignment', {
+        totalTakes: takeId + 1,
+        totalWords: words.length,
+      });
+    }
+
+    // Persist updated take_ids to merged_transcript.json
+    const mergedPath = join(jobDir, 'merged_transcript.json');
+    writeFileSync(mergedPath, JSON.stringify(merged, null, 2), 'utf-8');
+  }
+
   // Step 1.5: Take selector (rule-based duplicate detection — metadata/hints)
-  const takeDecisions = await runTakeSelector(jobDir, logger);
+  const takeDecisions = await runTakeSelector(jobDir, logger, videoType);
   const takeSelectorIds = new Set(takeDecisions.remove_ids);
 
   // Build hard-rejected IDs set (words AI should never see)
@@ -1644,99 +1984,182 @@ export async function runMergeAndClean(
     });
   }
 
-  // Step 2: AI Step 1 — Select narrative from ALL words (with take selector hints)
-  const allWordsText = buildStructuredText(merged.words, takeSelectorIds, hardRejectedIds, logger);
-  const hints = buildTakeSelectorHints(takeDecisions);
-  const candidatesText = buildCandidatesText(takeDecisions);
-  logger.info('Take selector hints for AI', {
-    hintCount: takeDecisions.decisions.length,
-    candidateGroups: takeDecisions.candidates?.length ?? 0,
-  });
-  let { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger);
+  // ── Step 1.6: Filler detection — mark filler words ──
+  try {
+    await runFillerDetector(jobDir, logger);
+  } catch (err) {
+    logger.warn('Filler detector failed, continuing without filler detection', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
-  // Step 2.4: Coverage retry — if below 55%, re-run AI with stronger instruction
-  const presenterWords = merged.words.filter(w => w.is_presenter && !hardRejectedIds.has(w.id));
-  const initialSelectedIds = new Set(narrativeRanges.flatMap(r => r.ids));
-  const initialSelectedPresenter = presenterWords.filter(w => initialSelectedIds.has(w.id)).length;
-  const initialCoverage = presenterWords.length > 0 ? initialSelectedPresenter / presenterWords.length : 1;
+  // ── Step 1.75: Sentence Builder — build sentence menu ──
+  let sentenceMenu: SentenceMenu | null = null;
+  try {
+    sentenceMenu = await runSentenceBuilder(jobDir, logger);
+  } catch (err) {
+    logger.warn('Sentence builder failed, falling back to legacy word-level selection', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
-  if (initialCoverage < 0.55 && presenterWords.length > 0) {
-    logger.warn('Coverage too low after AI Step 1, re-running with stronger instruction', {
-      coverage: `${(initialCoverage * 100).toFixed(0)}%`,
-      selected: initialSelectedPresenter,
-      presenter: presenterWords.length,
+  let finalRanges: KeepRange[];
+  let usage: AIUsage;
+
+  if (sentenceMenu && sentenceMenu.stats.best_sentences >= 3) {
+    // ── NEW PATH: Sentence-menu-based AI selection ──
+    logger.info('Using sentence menu for AI selection', {
+      sentences: sentenceMenu.stats.best_sentences,
+      groups: sentenceMenu.stats.unique_groups,
     });
 
-    const retryPreamble = `Your previous selection covered only ${Math.round(initialCoverage * 100)}% of presenter words.
+    const menuText = buildSentenceMenuText(sentenceMenu);
+
+    // Build context block with user settings
+    const contextParts: string[] = [];
+    if (videoType && videoType !== 'general') {
+      contextParts.push(`VIDEO TYPE: ${videoType}`);
+    }
+    if (targetDuration && targetDuration !== 'auto') {
+      contextParts.push(`TARGET DURATION: ${targetDuration} seconds — adjust your selection to fit this duration.`);
+    }
+    if (template) {
+      contextParts.push(`USER INSTRUCTIONS: ${template}`);
+    }
+    const contextBlock = contextParts.length > 0
+      ? `CONTEXT:\n${contextParts.join('\n')}\n`
+      : '';
+
+    // Step 2: AI selects sentences from menu
+    let { selectedIds, usage: usage1 } = await runAISentenceSelection(menuText, contextBlock, brain, logger);
+    let narrativeRanges = sentenceSelectionToKeepRanges(selectedIds, sentenceMenu, logger);
+
+    // Step 2.4: Coverage retry — if below 55%
+    const presenterWords = merged.words.filter(w => w.is_presenter && !hardRejectedIds.has(w.id));
+    const initialSelectedWordIds = new Set(narrativeRanges.flatMap(r => r.ids));
+    const initialSelectedPresenter = presenterWords.filter(w => initialSelectedWordIds.has(w.id)).length;
+    const initialCoverage = presenterWords.length > 0 ? initialSelectedPresenter / presenterWords.length : 1;
+
+    if (initialCoverage < 0.55 && presenterWords.length > 0) {
+      logger.warn('Coverage too low after sentence selection, retrying', {
+        coverage: `${(initialCoverage * 100).toFixed(0)}%`,
+        selected: initialSelectedPresenter,
+        presenter: presenterWords.length,
+      });
+
+      // Find unselected sentences
+      const selectedSet = new Set(selectedIds);
+      const unselected = sentenceMenu.sentences
+        .filter(s => s.is_best_in_group && !selectedSet.has(s.id))
+        .map(s => `${s.id} (${s.word_count} words, score ${s.score}): "${s.text}"`)
+        .join('\n');
+
+      const retryPreamble = `Your previous selection covered only ${Math.round(initialCoverage * 100)}% — below the 55% minimum.
+
+UNSELECTED SENTENCES available:
+${unselected}
+
+Add more sentences from the menu. Target: at least ${Math.ceil(presenterWords.length * 0.6)} words total.
+Return ALL sentences you want (both previously selected AND new additions).`;
+
+      const retry = await runAISentenceSelection(menuText, contextBlock, brain, logger, retryPreamble);
+      selectedIds = retry.selectedIds;
+      narrativeRanges = sentenceSelectionToKeepRanges(selectedIds, sentenceMenu, logger);
+      usage1 = {
+        inputTokens: usage1.inputTokens + retry.usage.inputTokens,
+        outputTokens: usage1.outputTokens + retry.usage.outputTokens,
+        estimatedCostUSD: usage1.estimatedCostUSD + retry.usage.estimatedCostUSD,
+      };
+
+      const retrySelectedWordIds = new Set(narrativeRanges.flatMap(r => r.ids));
+      const retryCoverage = presenterWords.filter(w => retrySelectedWordIds.has(w.id)).length / presenterWords.length;
+      logger.info('Coverage after retry', { coverage: `${(retryCoverage * 100).toFixed(0)}%` });
+    }
+
+    // Reduced post-processing for sentence-menu path:
+    // - Skip validateKeepRanges (sentences are already complete)
+    // - Skip splitRangesAtTakeBreaks (sentences are from single takes)
+    // - Skip deduplicateWithinSegments (sentence builder already deduped)
+    // - Skip deduplicateBetweenSegments (sentence builder already deduped)
+    // - Skip trimDuplicateEdges (sentences are complete units)
+    // - KEEP enforceStarredLimit (safety check)
+    // - KEEP crossReferencePresenter + AI Final Review (safety check)
+
+    const starredEnforced = enforceStarredLimit(narrativeRanges, merged.words, logger);
+
+    // Cross-reference with presenter detection
+    const allWordsText = buildStructuredText(merged.words, takeSelectorIds, hardRejectedIds, logger);
+    const flaggedRanges = crossReferencePresenter(starredEnforced, merged.words, logger);
+
+    // AI Final Review only if flagged segments exist
+    const { finalRanges: reviewedRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
+
+    finalRanges = reviewedRanges;
+    usage = {
+      inputTokens: usage1.inputTokens + usage2.inputTokens,
+      outputTokens: usage1.outputTokens + usage2.outputTokens,
+      estimatedCostUSD: usage1.estimatedCostUSD + usage2.estimatedCostUSD,
+    };
+
+  } else {
+    // ── LEGACY PATH: Word-level AI selection (fallback) ──
+    logger.info('Using legacy word-level AI selection');
+
+    const allWordsText = buildStructuredText(merged.words, takeSelectorIds, hardRejectedIds, logger);
+    const hints = buildTakeSelectorHints(takeDecisions);
+    const candidatesText = buildCandidatesText(takeDecisions);
+    logger.info('Take selector hints for AI', {
+      hintCount: takeDecisions.decisions.length,
+      candidateGroups: takeDecisions.candidates?.length ?? 0,
+    });
+    let { narrativeRanges, usage: usage1 } = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger);
+
+    // Coverage retry
+    const presenterWords = merged.words.filter(w => w.is_presenter && !hardRejectedIds.has(w.id));
+    const initialSelectedIds = new Set(narrativeRanges.flatMap(r => r.ids));
+    const initialSelectedPresenter = presenterWords.filter(w => initialSelectedIds.has(w.id)).length;
+    const initialCoverage = presenterWords.length > 0 ? initialSelectedPresenter / presenterWords.length : 1;
+
+    if (initialCoverage < 0.55 && presenterWords.length > 0) {
+      logger.warn('Coverage too low after AI Step 1, re-running', {
+        coverage: `${(initialCoverage * 100).toFixed(0)}%`,
+        selected: initialSelectedPresenter,
+        presenter: presenterWords.length,
+      });
+
+      const retryPreamble = `Your previous selection covered only ${Math.round(initialCoverage * 100)}% of presenter words.
 This is below the 55% minimum. You MUST add more segments.
-
-MISSING PARTS CHECK — verify each one:
-- Hook/opening question
-- Problem statement
-- Solution description
-- How it works (process)
-- Result/guarantee
-- Call to action
-
 Add segments for any missing part. Target: at least ${Math.ceil(presenterWords.length * 0.6)} words.
 
 RETURN FORMAT — JSON ONLY:
-Respond with ONLY a valid JSON object. No text before or after.
-{
-  "keep_ranges": [
-    { "ids": [1,2,3,...], "reason": "..." },
-    ...
-  ]
-}`;
+{ "keep_ranges": [ { "ids": [1,2,3,...], "reason": "..." } ] }`;
 
-    const retry = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger, retryPreamble);
-    narrativeRanges = retry.narrativeRanges;
-    usage1 = {
-      inputTokens: usage1.inputTokens + retry.usage.inputTokens,
-      outputTokens: usage1.outputTokens + retry.usage.outputTokens,
-      estimatedCostUSD: usage1.estimatedCostUSD + retry.usage.estimatedCostUSD,
+      const retry = await runAINarrativeSelection(allWordsText, hints, candidatesText, brain, logger, retryPreamble);
+      narrativeRanges = retry.narrativeRanges;
+      usage1 = {
+        inputTokens: usage1.inputTokens + retry.usage.inputTokens,
+        outputTokens: usage1.outputTokens + retry.usage.outputTokens,
+        estimatedCostUSD: usage1.estimatedCostUSD + retry.usage.estimatedCostUSD,
+      };
+    }
+
+    // Full post-processing for legacy path
+    const validatedRanges = validateKeepRanges(narrativeRanges, merged.words, logger);
+    const splitRanges = splitRangesAtTakeBreaks(validatedRanges, merged.words, logger);
+    const starredEnforced = enforceStarredLimit(splitRanges, merged.words, logger);
+    const dedupedRanges = deduplicateWithinSegments(starredEnforced, merged.words, logger);
+    const crossDedupedRanges = deduplicateBetweenSegments(dedupedRanges, merged.words, logger);
+    const trimmedRanges = trimDuplicateEdges(crossDedupedRanges, merged.words, logger);
+    const flaggedRanges = crossReferencePresenter(trimmedRanges, merged.words, logger);
+    const { finalRanges: reviewedRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
+
+    finalRanges = reviewedRanges;
+    usage = {
+      inputTokens: usage1.inputTokens + usage2.inputTokens,
+      outputTokens: usage1.outputTokens + usage2.outputTokens,
+      estimatedCostUSD: usage1.estimatedCostUSD + usage2.estimatedCostUSD,
     };
-
-    const retrySelectedIds = new Set(narrativeRanges.flatMap(r => r.ids));
-    const retryCoverage = presenterWords.filter(w => retrySelectedIds.has(w.id)).length / presenterWords.length;
-    logger.info('Coverage after retry', { coverage: `${(retryCoverage * 100).toFixed(0)}%` });
   }
-
-  // Step 2.5: Validate keep_ranges — remove fragments and log suspicious starts
-  const validatedRanges = validateKeepRanges(narrativeRanges, merged.words, logger);
-  logger.info('Validation completed', {
-    before: narrativeRanges.length,
-    after: validatedRanges.length,
-    removed: narrativeRanges.length - validatedRanges.length,
-  });
-
-  // Step 2.6: Split ranges that cross take breaks (gap > 1s)
-  const splitRanges = splitRangesAtTakeBreaks(validatedRanges, merged.words, logger);
-
-  // Step 2.7: Enforce starred words limit (max 1 consecutive non-presenter)
-  const starredEnforced = enforceStarredLimit(splitRanges, merged.words, logger);
-
-  // Step 2.8: Deduplicate repeated phrases within segments
-  const dedupedRanges = deduplicateWithinSegments(starredEnforced, merged.words, logger);
-
-  // Step 2.85: Remove repeated phrases between consecutive segments
-  const crossDedupedRanges = deduplicateBetweenSegments(dedupedRanges, merged.words, logger);
-
-  // Step 2.9: Trim duplicate edge words (e.g. stray word from previous sentence)
-  const trimmedRanges = trimDuplicateEdges(crossDedupedRanges, merged.words, logger);
-
-  // Step 3: Cross-reference with presenter detection
-  const flaggedRanges = crossReferencePresenter(trimmedRanges, merged.words, logger);
-
-  // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
-  const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
-
-  // Combine usage from both AI calls
-  const usage: AIUsage = {
-    inputTokens: usage1.inputTokens + usage2.inputTokens,
-    outputTokens: usage1.outputTokens + usage2.outputTokens,
-    estimatedCostUSD: usage1.estimatedCostUSD + usage2.estimatedCostUSD,
-  };
 
   // Build effective remove ranges from AI keep_ranges (invert: everything not kept is removed)
   const keepIdSet = new Set(finalRanges.flatMap(r => r.ids));
@@ -1773,8 +2196,8 @@ Respond with ONLY a valid JSON object. No text before or after.
   // Count stats
   const selectedByAI = keepIdSet.size;
   const keptWords = merged.words.filter((w) => keepIdSet.has(w.id));
-  const flaggedSegmentCount = flaggedRanges.filter((r) => r.flagged).length;
-  const aiCalls = usage2.inputTokens > 0 ? 2 : 1;
+  const flaggedSegmentCount = 0; // Tracked internally in each path
+  const aiCalls = Math.ceil(usage.estimatedCostUSD > 0 ? usage.outputTokens / 500 : 1); // Estimate
 
   // Coverage validation
   const presenterWordCount = merged.words.filter((w) => w.is_presenter).length;

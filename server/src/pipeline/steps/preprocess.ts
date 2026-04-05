@@ -252,7 +252,7 @@ async function preprocess(context: StepContext): Promise<StepResult> {
     frameInterval: (config.frameInterval as number) ?? 5,
     audioScrub: {
       enabled: audioScrubRaw?.enabled ?? true,
-      thresholdDb: audioScrubRaw?.thresholdDb ?? -26,
+      thresholdDb: audioScrubRaw?.thresholdDb ?? -32,
     },
   };
 

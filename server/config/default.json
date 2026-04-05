@@ -75,6 +75,10 @@
     "lookbackSeconds": 15,
     "scoringOverrideMargin": 0.20
   },
+  "wordScorer": {
+    "thresholdPresenter": 0.50,
+    "thresholdReject": 0.35
+  },
   "audioScrub": {
     "enabled": true,
     "thresholdDb": -32
