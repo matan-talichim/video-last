@@ -1217,6 +1217,87 @@ function deduplicateWithinSegments(
   return result;
 }
 
+// ── Expand segments to complete sentences ──
+
+function expandToCompleteSentences(
+  keepRanges: KeepRange[],
+  words: Word[],
+  logger: Logger,
+): KeepRange[] {
+  const wordsMap = new Map<number, Word>(words.map(w => [w.id, w]));
+  const presenterWords = words.filter(w => w.is_presenter);
+
+  // Hebrew words that typically START a sentence
+  const SENTENCE_STARTERS = new Set([
+    'אם','אנחנו','אני','אתה','אתם','זה','זאת','העסק',
+    'הם','היא','הוא','כל','כש','למה','מה','מי','ואם',
+    'ואנחנו','כשאתה','כשאני','מאחורי','תשאיר',
+    'אוטומציות','יותר','פרויקט','והתוצאה','ואם',
+  ]);
+
+  // Hebrew words that should NOT end a sentence
+  const BAD_ENDINGS = new Set([
+    'לא','את','ולא','של','על','עם','הוא','היא','זה',
+    'אני','מחליף','להפוך','שהחיסכון',
+  ]);
+
+  let expandedBackward = 0;
+  let expandedForward = 0;
+
+  const result = keepRanges.map(range => {
+    let ids = [...range.ids];
+    const firstWord = wordsMap.get(ids[0]);
+    const lastWord = wordsMap.get(ids[ids.length - 1]);
+
+    if (!firstWord || !lastWord) return range;
+
+    // EXPAND BACKWARD: if first word is not a sentence starter,
+    // look backward for the nearest sentence starter
+    if (!SENTENCE_STARTERS.has(firstWord.word)) {
+      const firstIdx = presenterWords.findIndex(w => w.id === ids[0]);
+      if (firstIdx > 0) {
+        for (let i = firstIdx - 1; i >= Math.max(0, firstIdx - 5); i--) {
+          const candidate = presenterWords[i];
+          if (candidate.take_id !== firstWord.take_id) break;
+          if (!candidate.is_presenter) continue;
+
+          ids.unshift(candidate.id);
+          expandedBackward++;
+
+          if (SENTENCE_STARTERS.has(candidate.word)) break;
+        }
+      }
+    }
+
+    // EXPAND FORWARD: if last word is a bad ending,
+    // look forward for a proper ending
+    if (BAD_ENDINGS.has(lastWord.word)) {
+      const lastIdx = presenterWords.findIndex(w => w.id === ids[ids.length - 1]);
+      if (lastIdx < presenterWords.length - 1) {
+        for (let i = lastIdx + 1; i <= Math.min(presenterWords.length - 1, lastIdx + 3); i++) {
+          const candidate = presenterWords[i];
+          if (candidate.take_id !== lastWord.take_id) break;
+
+          ids.push(candidate.id);
+          expandedForward++;
+
+          if (!BAD_ENDINGS.has(candidate.word)) break;
+        }
+      }
+    }
+
+    return { ids, reason: range.reason };
+  });
+
+  logger.info('expandToCompleteSentences', {
+    totalSegments: keepRanges.length,
+    expandedBackward,
+    expandedForward,
+  });
+
+  return result;
+}
+
 // ── Trim duplicate edge words (e.g. "ידנית" from previous sentence leaking into next segment) ──
 
 function trimDuplicateEdges(
@@ -1480,8 +1561,11 @@ Respond with ONLY a valid JSON object. No text before or after.
   // Step 2.9: Trim duplicate edge words (e.g. stray word from previous sentence)
   const trimmedRanges = trimDuplicateEdges(dedupedRanges, merged.words, logger);
 
+  // Step 2.95: Expand to complete sentences
+  const expandedRanges = expandToCompleteSentences(trimmedRanges, merged.words, logger);
+
   // Step 3: Cross-reference with presenter detection
-  const flaggedRanges = crossReferencePresenter(trimmedRanges, merged.words, logger);
+  const flaggedRanges = crossReferencePresenter(expandedRanges, merged.words, logger);
 
   // Step 4: AI Step 2 — Final review (swap/remove flagged segments)
   const { finalRanges, usage: usage2 } = await runAIFinalReview(flaggedRanges, allWordsText, brain, logger);
