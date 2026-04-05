@@ -204,7 +204,7 @@ async function runMerge(
   logger.info('Running merge_transcript.py', { transcriptPath, segmentsPath, audioPath, speakerVerify });
 
   const { stdout, stderr } = await execFileAsync(pythonPath, args, {
-    timeout: speakerVerify ? 120000 : 30000,
+    timeout: speakerVerify ? 600000 : 30000,
   });
 
   if (stderr) {
@@ -254,7 +254,7 @@ async function runAlignWords(
 
   try {
     const { stdout, stderr } = await execFileAsync(pythonPath, args, {
-      timeout: 120000,
+      timeout: 600000,
     });
 
     if (stderr) {
@@ -328,7 +328,7 @@ async function runTakeSelector(
   logger.info('Running take_selector.py', { mergedPath, audioPath });
 
   const { stdout, stderr } = await execFileAsync(pythonPath, args, {
-    timeout: 60000,
+    timeout: 600000,
   });
 
   if (stderr) {

@@ -36,11 +36,11 @@
   },
   "ai": {
     "defaultBrain": "claude_sonnet_4_6",
-    "timeout": 60000,
+    "timeout": 600000,
     "maxTokens": 4096
   },
   "analysis": {
-    "timeout": 120000,
+    "timeout": 600000,
     "maxFrames": 20,
     "maxTokens": 8192
   },
