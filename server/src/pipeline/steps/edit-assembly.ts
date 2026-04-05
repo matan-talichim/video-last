@@ -155,7 +155,7 @@ export async function runEditAssembly(
   // Read padding from config
   const config = loadConfig();
   const editConfig = (config as unknown as Record<string, unknown>).editAssembly as
-    { paddingStart?: number; paddingEnd?: number; denoiseNoiseFloor?: number; audioCrossfade?: number } | undefined;
+    { paddingStart?: number; paddingEnd?: number; denoiseNoiseFloor?: number; audioCrossfade?: number; loudnormIntegrated?: number; loudnormTruePeak?: number; loudnormRange?: number } | undefined;
   const paddingStart = editConfig?.paddingStart ?? 0.03;
   const paddingEnd = editConfig?.paddingEnd ?? 0.15;
 
@@ -298,9 +298,14 @@ export async function runEditAssembly(
       // Build audio filter chain: denoise → loudness normalization → fade-in → fade-out
       const denoiseNf = editConfig?.denoiseNoiseFloor ?? -20;
       const denoise = `afftdn=nf=${denoiseNf}:tn=1:om=o`;
-      const loudnorm = 'loudnorm=I=-16:TP=-1.5:LRA=11';
-      const fadeIn = `afade=t=in:st=0:d=${DEFAULT_FADE_DURATION}`;
-      const fadeOut = `afade=t=out:st=${Math.max(0, segDuration - DEFAULT_FADE_DURATION)}:d=${DEFAULT_FADE_DURATION}`;
+      const loudnormI = editConfig?.loudnormIntegrated ?? -16;
+      const loudnormTP = editConfig?.loudnormTruePeak ?? -1.5;
+      const loudnormLRA = editConfig?.loudnormRange ?? 11;
+      const loudnorm = `loudnorm=I=${loudnormI}:TP=${loudnormTP}:LRA=${loudnormLRA}`;
+      // Cap fade duration to 30% of segment to avoid overlap on short segments
+      const effectiveFade = Math.min(DEFAULT_FADE_DURATION, segDuration * 0.3);
+      const fadeIn = `afade=t=in:st=0:d=${effectiveFade}`;
+      const fadeOut = `afade=t=out:st=${Math.max(0, segDuration - effectiveFade)}:d=${effectiveFade}`;
       const audioFilter = `${denoise},${loudnorm},${fadeIn},${fadeOut}`;
 
       // Use original fps (fallback to 30)

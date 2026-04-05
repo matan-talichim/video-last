@@ -69,7 +69,10 @@
     "audioBitrate": "192k",
     "minSegmentDuration": 0.1,
     "denoiseNoiseFloor": -20,
-    "audioCrossfade": 0.06
+    "audioCrossfade": 0.06,
+    "loudnormIntegrated": -16,
+    "loudnormTruePeak": -1.5,
+    "loudnormRange": 11
   },
   "takeSelector": {
     "enabled": true,
@@ -83,7 +86,8 @@
   },
   "mergeAndClean": {
     "silenceThresholdMs": 800,
-    "minSegmentAfterSplit": 1.5
+    "minSegmentAfterSplit": 1.5,
+    "minKeepSegmentDuration": 2.0
   },
   "audioScrub": {
     "enabled": true,

@@ -2253,7 +2253,9 @@ Return ALL sentences you want (both previously selected AND new additions).`;
       };
 
       const retrySelectedWordIds = new Set(narrativeRanges.flatMap(r => r.ids));
-      const retryCoverage = presenterWords.filter(w => retrySelectedWordIds.has(w.id)).length / presenterWords.length;
+      const retryCoverage = presenterWords.length > 0
+        ? presenterWords.filter(w => retrySelectedWordIds.has(w.id)).length / presenterWords.length
+        : 1;
       logger.info('Coverage after retry 1', { coverage: `${(retryCoverage * 100).toFixed(0)}%` });
 
       // Retry 2: if still below 55% after first retry
@@ -2287,7 +2289,9 @@ Return ALL sentences you want (both previously selected AND new additions).`;
         };
 
         const retry2WordIds = new Set(narrativeRanges.flatMap(r => r.ids));
-        const retry2Coverage = presenterWords.filter(w => retry2WordIds.has(w.id)).length / presenterWords.length;
+        const retry2Coverage = presenterWords.length > 0
+          ? presenterWords.filter(w => retry2WordIds.has(w.id)).length / presenterWords.length
+          : 1;
         logger.info('Coverage after retry 2', { coverage: `${(retry2Coverage * 100).toFixed(0)}%` });
       }
     }
@@ -2323,7 +2327,7 @@ Return ALL sentences you want (both previously selected AND new additions).`;
     const postProcCoverage = presenterWords.length > 0
       ? presenterWords.filter(w => postProcWordIds.has(w.id)).length / presenterWords.length
       : 1;
-    if (postProcCoverage < 0.55 && initialCoverage >= 0.55) {
+    if (postProcCoverage < 0.55 && initialCoverage >= 0.55 && narrativeRanges.length > 0) {
       logger.warn('Post-processing dropped coverage below threshold, reverting to pre-post-processing ranges', {
         beforePostProc: `${(initialCoverage * 100).toFixed(0)}%`,
         afterPostProc: `${(postProcCoverage * 100).toFixed(0)}%`,
@@ -2420,7 +2424,7 @@ RETURN FORMAT — JSON ONLY:
   );
 
   // Filter out invalid segments (start >= end) and micro-segments (< 2.0s)
-  const MIN_KEEP_SEGMENT_DURATION = 2.0;
+  const MIN_KEEP_SEGMENT_DURATION = (mergeCleanConfig.minKeepSegmentDuration as number) ?? 2.0;
   const keepSegments = silenceSplitSegments.filter((seg) => {
     if (seg.start >= seg.end) {
       logger.warn('Skipping invalid segment: start >= end', { start: seg.start, end: seg.end, duration: Math.round((seg.end - seg.start) * 1000) / 1000 });
